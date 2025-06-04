@@ -35,7 +35,8 @@ dependencies = [
 [project.optional-dependencies]
 ml = ["torch", "torchvision"]  # future CNN unmixing
 
-
+[project.scripts]
+multispecqr = "multispecqr._cli:main"
 
 [project.urls]
 Documentation = "https://github.com/jemsbhai/multispecqr#readme"
