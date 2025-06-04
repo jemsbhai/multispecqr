@@ -1,0 +1,1 @@
+"""QR layer decoder — to be implemented."""
