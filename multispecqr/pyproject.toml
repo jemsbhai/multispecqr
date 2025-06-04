@@ -9,7 +9,7 @@ description = "Encode and decode multi-spectral / multi-layer QR codes (RGB, UV,
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
-keywords = []
+keywords = ["qr", "multispectral", "barcode"]
 authors = [
   { name = "Muntaser Syed", email = "jemsbhai@gmail.com" }
 ]
