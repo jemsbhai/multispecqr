@@ -8,7 +8,10 @@
 ## Features
 
 - **3-Layer RGB Mode**: Encode 3 independent payloads using Red, Green, and Blue channels
-- **6-Layer Palette Mode**: Encode up to 6 independent payloads using a 64-color palette
+- **Up to 9-Layer Palette Mode**: Encode up to 9 independent payloads using adaptive color palettes
+  - 1-6 layers: 64-color palette
+  - 7-8 layers: 256-color palette
+  - 9 layers: 512-color palette
 - **Robustness Features**: Adaptive thresholding, preprocessing, and color calibration for real-world images
 - **ML-Based Decoder**: Optional neural network-based decoder for improved robustness (requires PyTorch)
 - **Full round-trip support**: Encode and decode with high fidelity
@@ -41,14 +44,14 @@ decoded = decode_rgb(img)
 print(decoded)  # ['Hello Red', 'Hello Green', 'Hello Blue']
 ```
 
-#### 6-Layer Palette Mode
+#### Palette Mode (up to 9 layers)
 
-Encode up to six separate pieces of data:
+Encode up to nine separate pieces of data:
 
 ```python
 from multispecqr import encode_layers, decode_layers
 
-# Encode up to 6 payloads
+# Encode 6 payloads (uses 64-color palette)
 data = ["Layer 1", "Layer 2", "Layer 3", "Layer 4", "Layer 5", "Layer 6"]
 img = encode_layers(data, version=2)
 img.save("palette_qr.png")
@@ -56,6 +59,15 @@ img.save("palette_qr.png")
 # Decode back
 decoded = decode_layers(img, num_layers=6)
 print(decoded)  # ['Layer 1', 'Layer 2', 'Layer 3', 'Layer 4', 'Layer 5', 'Layer 6']
+
+# Encode 8 payloads (automatically uses 256-color palette)
+data8 = ["A", "B", "C", "D", "E", "F", "G", "H"]
+img8 = encode_layers(data8, version=3)
+
+# Encode 9 payloads (automatically uses 512-color palette)
+data9 = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+img9 = encode_layers(data9, version=4)
+decoded9 = decode_layers(img9, num_layers=9)
 ```
 
 #### Robustness Features
@@ -150,11 +162,14 @@ python -m multispecqr encode "Red data" "Green data" "Blue data" output.png
 python -m multispecqr decode output.png
 ```
 
-#### Palette Mode (up to 6 layers)
+#### Palette Mode (up to 9 layers)
 
 ```bash
-# Encode up to 6 payloads using palette mode
+# Encode up to 6 payloads using palette mode (64-color palette)
 python -m multispecqr encode "L1" "L2" "L3" "L4" "L5" "L6" output.png --mode palette
+
+# Encode 8 payloads (automatically uses 256-color palette)
+python -m multispecqr encode "A" "B" "C" "D" "E" "F" "G" "H" output.png --mode palette
 
 # Decode a palette QR code (specify number of layers)
 python -m multispecqr decode output.png --mode palette --layers 6
@@ -175,7 +190,7 @@ python -m multispecqr encode "R" "G" "B" output.png -v 4 -e H -m rgb
 **Encode command:**
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
-| `--mode` | `-m` | Encoding mode: `rgb` (3 layers) or `palette` (1-6 layers) | `rgb` |
+| `--mode` | `-m` | Encoding mode: `rgb` (3 layers) or `palette` (1-9 layers) | `rgb` |
 | `--version` | `-v` | QR code version (1-40). Higher = more capacity | `2` |
 | `--ec` | `-e` | Error correction: `L` (7%), `M` (15%), `Q` (25%), `H` (30%) | `M` |
 
@@ -183,7 +198,7 @@ python -m multispecqr encode "R" "G" "B" output.png -v 4 -e H -m rgb
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
 | `--mode` | `-m` | Decoding mode: `rgb` or `palette` | `rgb` |
-| `--layers` | `-l` | Number of layers to decode (palette mode only) | `6` |
+| `--layers` | `-l` | Number of layers to decode (palette mode, 1-9) | `6` |
 
 ## API Reference
 
@@ -200,13 +215,18 @@ Encode three payloads into an RGB QR code using channel separation.
 
 #### `encode_layers(data_list, *, version=4, ec="M")`
 
-Encode 1-6 payloads using the 64-color palette system.
+Encode 1-9 payloads using adaptive color palettes.
 
-- **data_list** (`list[str]`): List of 1-6 payload strings
+- **data_list** (`list[str]`): List of 1-9 payload strings
 - **version** (`int`): QR code version 1-40. Default: 4
 - **ec** (`str`): Error correction level. Default: "M"
 - **Returns**: `PIL.Image.Image` in RGB mode
-- **Raises**: `ValueError` if more than 6 payloads provided
+- **Raises**: `ValueError` if more than 9 payloads provided
+
+Automatically selects the appropriate palette:
+- 1-6 layers: 64-color palette (6-bit encoding)
+- 7-8 layers: 256-color palette (8-bit encoding)
+- 9 layers: 512-color palette (9-bit encoding)
 
 ### Decoding Functions
 
@@ -236,14 +256,16 @@ Decode an RGB QR code back into three payloads.
 Decode a palette-encoded QR code.
 
 - **img** (`PIL.Image.Image`): RGB image to decode
-- **num_layers** (`int | None`): Number of layers to decode (1-6). Default: 6
+- **num_layers** (`int | None`): Number of layers to decode (1-9). Default: 6
 - **preprocess** (`str | None`): Optional preprocessing (same options as `decode_rgb`)
 - **calibration** (`dict | None`): Calibration data from `compute_calibration()`
 - **method** (`str`): Decoding method:
   - `"threshold"`: Traditional threshold-based decoding (default)
   - `"ml"`: ML-based decoder using neural network (requires PyTorch)
 - **Returns**: `list[str]` of decoded strings. Empty string for failed layers.
-- **Raises**: `ValueError` if image is not RGB mode; `ImportError` if method="ml" but PyTorch not installed
+- **Raises**: `ValueError` if image is not RGB mode or num_layers > 9; `ImportError` if method="ml" but PyTorch not installed
+
+Automatically selects the appropriate palette based on num_layers.
 
 ### Calibration Functions
 
@@ -275,15 +297,27 @@ Apply color calibration to an image.
 
 #### `palette_6()`
 
-Get the 64-color palette mapping bit-vectors to RGB colors.
+Get the 64-color palette (6-layer) mapping bit-vectors to RGB colors.
 
 - **Returns**: `dict[tuple[int, ...], tuple[int, int, int]]`
 
 #### `inverse_palette_6()`
 
-Get the inverse palette mapping RGB colors to bit-vectors.
+Get the inverse 6-layer palette mapping RGB colors to bit-vectors.
 
 - **Returns**: `dict[tuple[int, int, int], tuple[int, ...]]`
+
+#### `palette_8()`
+
+Get the 256-color palette (8-layer) mapping bit-vectors to RGB colors.
+
+- **Returns**: `dict[tuple[int, ...], tuple[int, int, int]]`
+
+#### `palette_9()`
+
+Get the 512-color palette (9-layer) mapping bit-vectors to RGB colors.
+
+- **Returns**: `dict[tuple[int, ...], tuple[int, int, int]]`
 
 ## How It Works
 
@@ -297,20 +331,42 @@ Payload 2 → QR Layer → Green Channel ─┼→ Combined RGB Image
 Payload 3 → QR Layer → Blue Channel  ─┘
 ```
 
-### 6-Layer Palette Mode
+### Multi-Layer Palette Mode
 
-Uses a systematic 64-color palette to encode all 2^6 possible combinations of 6 binary layers. Each pixel's color encodes which of the 6 layers have a "black module" at that position.
+Uses systematic color palettes to encode multiple binary layers in a single image. The library automatically selects the appropriate palette based on the number of layers.
 
-**Color encoding scheme:**
+#### 6-Layer Mode (64 colors)
+
+For 1-6 layers, uses a 64-color palette with 2 bits per channel:
 - Bits 0-1 → Red level: {0, 85, 170, 255}
 - Bits 2-3 → Green level: {0, 85, 170, 255}
 - Bits 4-5 → Blue level: {0, 85, 170, 255}
 
-This creates 4³ = 64 unique colors, one for each possible combination of 6 binary bits. The decoder uses nearest-neighbor color matching to recover the bit-vectors, then reconstructs each layer.
+This creates 4³ = 64 unique colors with ~85 unit spacing between levels.
+
+#### 8-Layer Mode (256 colors)
+
+For 7-8 layers, uses a 256-color palette with 3-3-2 bit distribution:
+- Bits 0-2 → Red level: 8 levels (0-255)
+- Bits 3-5 → Green level: 8 levels (0-255)
+- Bits 6-7 → Blue level: 4 levels (0-255)
+
+This creates 8×8×4 = 256 unique colors with ~36 unit spacing on R/G channels.
+
+#### 9-Layer Mode (512 colors)
+
+For 9 layers, uses a 512-color palette with 3 bits per channel:
+- Bits 0-2 → Red level: 8 levels
+- Bits 3-5 → Green level: 8 levels
+- Bits 6-8 → Blue level: 8 levels
+
+This creates 8³ = 512 unique colors with ~36 unit spacing per channel.
 
 ```
-6 Payloads → 6 QR Layers → Pixel-wise bit-vectors → 64-color palette → RGB Image
+N Payloads → N QR Layers → Pixel-wise bit-vectors → Adaptive palette → RGB Image
 ```
+
+The decoder uses nearest-neighbor color matching to recover the bit-vectors, then reconstructs each layer.
 
 ### Robustness Features
 

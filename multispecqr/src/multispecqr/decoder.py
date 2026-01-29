@@ -176,11 +176,16 @@ def decode_layers(
     method: DecodeMethod = "threshold",
 ) -> List[str]:
     """
-    Decode a multi-layer QR image encoded with the 6-color palette.
+    Decode a multi-layer QR image encoded with a color palette.
+
+    Automatically selects the appropriate palette based on num_layers:
+    - 1-6 layers: 64-color palette (6-bit)
+    - 7-8 layers: 256-color palette (8-bit)
+    - 9 layers: 512-color palette (9-bit)
 
     Args:
         img: RGB PIL Image encoded with encode_layers()
-        num_layers: Number of layers to decode (1-6). If None, defaults to 6.
+        num_layers: Number of layers to decode (1-9). If None, defaults to 6.
         preprocess: Optional preprocessing:
             - None or "none": No preprocessing
             - "blur": Gaussian blur to reduce noise
@@ -194,10 +199,10 @@ def decode_layers(
         List of decoded strings, one per layer. Empty string for failed layers.
 
     Raises:
-        ValueError: If image is not RGB mode
+        ValueError: If image is not RGB mode or num_layers > 9
         ImportError: If method="ml" but torch is not installed
     """
-    from .palette import inverse_palette_6
+    from .palette import _select_palette
 
     if img.mode != "RGB":
         raise ValueError("Expected an RGB image")
@@ -205,6 +210,9 @@ def decode_layers(
     # Default to 6 layers if not specified
     if num_layers is None:
         num_layers = 6
+
+    if num_layers > 9:
+        raise ValueError("Maximum of 9 layers supported")
 
     # Use ML-based decoder if requested
     if method == "ml":
@@ -229,16 +237,15 @@ def decode_layers(
 
     h, w = arr.shape[:2]
 
-    # Build inverse lookup and color array for nearest-neighbor matching
-    inv_palette = inverse_palette_6()
-    palette_colors = np.array(list(inv_palette.keys()), dtype=np.uint8)  # (64, 3)
+    # Select appropriate palette based on number of layers
+    _, inv_palette, num_bits = _select_palette(num_layers)
+    palette_colors = np.array(list(inv_palette.keys()), dtype=np.uint8)
     palette_bitvecs = list(inv_palette.values())
 
     # Reshape image for efficient color matching
     pixels = arr.reshape(-1, 3)  # (H*W, 3)
 
     # Find nearest palette color for each pixel using Euclidean distance
-    # Compute distances: (H*W, 64)
     distances = np.linalg.norm(
         pixels[:, np.newaxis, :].astype(np.float32) - palette_colors[np.newaxis, :, :].astype(np.float32),
         axis=2
@@ -246,8 +253,8 @@ def decode_layers(
     nearest_idx = np.argmin(distances, axis=1)  # (H*W,)
 
     # Map each pixel to its bit-vector
-    bitvec_array = np.array([palette_bitvecs[i] for i in nearest_idx])  # (H*W, 6)
-    bitvec_array = bitvec_array.reshape(h, w, 6)  # (H, W, 6)
+    bitvec_array = np.array([palette_bitvecs[i] for i in nearest_idx])  # (H*W, num_bits)
+    bitvec_array = bitvec_array.reshape(h, w, num_bits)  # (H, W, num_bits)
 
     # Extract and decode each layer
     results: List[str] = []

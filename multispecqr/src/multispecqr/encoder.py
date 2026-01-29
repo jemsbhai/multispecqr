@@ -49,15 +49,34 @@ def encode_rgb(
 
 
 
-from .palette import palette_6
+from .palette import _select_palette
 
 def encode_layers(data_list: list[str], *, version: int = 4, ec: str = "M") -> Image.Image:
     """
-    Encode N binary QR layers into a color QR using the RGB_CMY 6-color palette.
-    Up to 6 layers. Returns a PIL.Image in RGB mode.
+    Encode N binary QR layers into a color QR using an appropriate color palette.
+
+    Automatically selects palette based on number of layers:
+    - 1-6 layers: 64-color palette (6-bit)
+    - 7-8 layers: 256-color palette (8-bit)
+    - 9 layers: 512-color palette (9-bit)
+
+    Args:
+        data_list: List of payload strings (1-9 layers)
+        version: QR code version 1-40
+        ec: Error correction level ("L", "M", "Q", "H")
+
+    Returns:
+        PIL.Image in RGB mode
+
+    Raises:
+        ValueError: If more than 9 layers provided
     """
-    if len(data_list) > 6:
-        raise ValueError("Maximum of 6 layers supported in palette_6 mode.")
+    num_layers = len(data_list)
+    if num_layers > 9:
+        raise ValueError("Maximum of 9 layers supported.")
+
+    # Select appropriate palette based on layer count
+    codebook, _, num_bits = _select_palette(num_layers)
 
     layers = [_make_layer(data, version, ec) for data in data_list]
     shape = layers[0].shape
@@ -66,13 +85,11 @@ def encode_layers(data_list: list[str], *, version: int = 4, ec: str = "M") -> I
 
     h, w = shape
     img_arr = np.zeros((h, w, 3), dtype=np.uint8)
-    codebook = palette_6()
 
-    num_layers = len(layers)
     for y in range(h):
         for x in range(w):
-            # Build 6-element bit-vector, padding with zeros for unused layers
-            bits = [layer[y, x] for layer in layers] + [0] * (6 - num_layers)
+            # Build bit-vector, padding with zeros for unused layers
+            bits = [layer[y, x] for layer in layers] + [0] * (num_bits - num_layers)
             key = tuple(bits)
             img_arr[y, x] = codebook.get(key, (255, 255, 255))  # default to white
 
