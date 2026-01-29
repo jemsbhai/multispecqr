@@ -14,6 +14,15 @@ import cv2
 from PIL import Image
 
 
+# Check if pyzbar is available for fallback decoding
+try:
+    from pyzbar import pyzbar as _pyzbar
+    _PYZBAR_AVAILABLE = True
+except ImportError:
+    _pyzbar = None
+    _PYZBAR_AVAILABLE = False
+
+
 # Valid threshold methods
 ThresholdMethod = Literal["global", "otsu", "adaptive_gaussian", "adaptive_mean"]
 
@@ -82,11 +91,31 @@ def _apply_threshold(
 def _decode_single_layer(layer_img: np.ndarray) -> str | None:
     """
     Try to decode a monochrome QR layer (0/255 uint8).
-    Returns the decoded text, or None if decoding fails.
+    
+    Uses OpenCV's QRCodeDetector as primary decoder, with pyzbar as fallback
+    to handle edge cases where OpenCV fails on valid QR codes.
+    
+    Args:
+        layer_img: Binary image with QR code (0=black, 255=white)
+        
+    Returns:
+        Decoded text, or None if decoding fails.
     """
+    # Try OpenCV first (faster)
     detector = cv2.QRCodeDetector()
     data, _, _ = detector.detectAndDecode(layer_img)
-    return data or None
+    if data:
+        return data
+    
+    # Fallback to pyzbar if available (handles some edge cases OpenCV misses)
+    if _PYZBAR_AVAILABLE:
+        # pyzbar expects a PIL Image
+        pil_img = Image.fromarray(layer_img)
+        results = _pyzbar.decode(pil_img)
+        if results:
+            return results[0].data.decode('utf-8')
+    
+    return None
 
 
 def decode_rgb(
