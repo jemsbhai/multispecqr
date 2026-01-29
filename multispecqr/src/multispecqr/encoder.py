@@ -68,9 +68,12 @@ def encode_layers(data_list: list[str], *, version: int = 4, ec: str = "M") -> I
     img_arr = np.zeros((h, w, 3), dtype=np.uint8)
     codebook = palette_6()
 
+    num_layers = len(layers)
     for y in range(h):
         for x in range(w):
-            key = tuple(layer[y, x] for layer in layers)
+            # Build 6-element bit-vector, padding with zeros for unused layers
+            bits = [layer[y, x] for layer in layers] + [0] * (6 - num_layers)
+            key = tuple(bits)
             img_arr[y, x] = codebook.get(key, (255, 255, 255))  # default to white
 
     return Image.fromarray(img_arr, mode="RGB")
