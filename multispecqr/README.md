@@ -9,6 +9,7 @@
 
 - **3-Layer RGB Mode**: Encode 3 independent payloads using Red, Green, and Blue channels
 - **6-Layer Palette Mode**: Encode up to 6 independent payloads using a 64-color palette
+- **Robustness Features**: Adaptive thresholding, preprocessing, and color calibration for real-world images
 - **Full round-trip support**: Encode and decode with high fidelity
 - **Simple API**: Easy-to-use Python functions for encoding and decoding
 - **CLI included**: Full-featured command-line interface for quick operations
@@ -54,6 +55,49 @@ img.save("palette_qr.png")
 # Decode back
 decoded = decode_layers(img, num_layers=6)
 print(decoded)  # ['Layer 1', 'Layer 2', 'Layer 3', 'Layer 4', 'Layer 5', 'Layer 6']
+```
+
+#### Robustness Features
+
+For decoding real-world images (photos of printed QR codes):
+
+```python
+from multispecqr import decode_rgb, decode_layers
+
+# Use adaptive thresholding for uneven lighting
+decoded = decode_rgb(img, threshold_method="otsu")
+
+# Use preprocessing to reduce noise
+decoded = decode_rgb(img, preprocess="denoise")
+
+# Combine multiple options
+decoded = decode_rgb(img, threshold_method="otsu", preprocess="blur")
+```
+
+#### Color Calibration
+
+For accurate color matching when decoding photographed QR codes:
+
+```python
+from multispecqr import (
+    generate_calibration_card,
+    compute_calibration,
+    decode_layers
+)
+
+# 1. Generate and print a calibration card
+card = generate_calibration_card()
+card.save("calibration_card.png")
+
+# 2. Photograph the printed card alongside your QR code
+# 3. Load both the reference and photographed card
+photographed_card = Image.open("photographed_card.jpg")
+
+# 4. Compute calibration
+calibration = compute_calibration(card, photographed_card)
+
+# 5. Use calibration when decoding
+decoded = decode_layers(qr_image, calibration=calibration)
 ```
 
 ### Command Line Interface
@@ -139,22 +183,60 @@ Encode 1-6 payloads using the 64-color palette system.
 
 ### Decoding Functions
 
-#### `decode_rgb(img)`
+#### `decode_rgb(img, *, threshold_method="global", preprocess=None, calibration=None)`
 
 Decode an RGB QR code back into three payloads.
 
 - **img** (`PIL.Image.Image`): RGB image to decode
+- **threshold_method** (`str`): Thresholding algorithm:
+  - `"global"`: Simple threshold at 128 (default, fastest)
+  - `"otsu"`: Otsu's automatic threshold selection
+  - `"adaptive_gaussian"`: Adaptive threshold with Gaussian weights
+  - `"adaptive_mean"`: Adaptive threshold with mean of neighborhood
+- **preprocess** (`str | None`): Optional preprocessing:
+  - `None` or `"none"`: No preprocessing
+  - `"blur"`: Gaussian blur to reduce noise
+  - `"denoise"`: Non-local means denoising
+- **calibration** (`dict | None`): Calibration data from `compute_calibration()`
 - **Returns**: `list[str]` of 3 strings (R, G, B channels). Empty string for failed layers.
 - **Raises**: `ValueError` if image is not RGB mode
 
-#### `decode_layers(img, num_layers=None)`
+#### `decode_layers(img, num_layers=None, *, preprocess=None, calibration=None)`
 
 Decode a palette-encoded QR code.
 
 - **img** (`PIL.Image.Image`): RGB image to decode
 - **num_layers** (`int | None`): Number of layers to decode (1-6). Default: 6
+- **preprocess** (`str | None`): Optional preprocessing (same options as `decode_rgb`)
+- **calibration** (`dict | None`): Calibration data from `compute_calibration()`
 - **Returns**: `list[str]` of decoded strings. Empty string for failed layers.
 - **Raises**: `ValueError` if image is not RGB mode
+
+### Calibration Functions
+
+#### `generate_calibration_card(patch_size=50, padding=5)`
+
+Generate a calibration card containing all 64 palette colors.
+
+- **patch_size** (`int`): Size of each color patch in pixels. Default: 50
+- **padding** (`int`): Padding between patches. Default: 5
+- **Returns**: `PIL.Image.Image` containing the calibration card
+
+#### `compute_calibration(reference, sample, *, patch_size=50, padding=5)`
+
+Compute color calibration from a reference and sample calibration card.
+
+- **reference** (`PIL.Image.Image`): Original calibration card (from `generate_calibration_card()`)
+- **sample** (`PIL.Image.Image`): Photographed calibration card
+- **Returns**: `dict` containing calibration data (matrix, offset, method)
+
+#### `apply_calibration(img, calibration)`
+
+Apply color calibration to an image.
+
+- **img** (`PIL.Image.Image`): Input image to calibrate
+- **calibration** (`dict`): Calibration data from `compute_calibration()`
+- **Returns**: `PIL.Image.Image` with corrected colors
 
 ### Palette Functions
 
@@ -196,6 +278,23 @@ This creates 4³ = 64 unique colors, one for each possible combination of 6 bina
 ```
 6 Payloads → 6 QR Layers → Pixel-wise bit-vectors → 64-color palette → RGB Image
 ```
+
+### Robustness Features
+
+For real-world usage (photographed QR codes), the library provides:
+
+1. **Adaptive Thresholding**: Handles uneven lighting conditions
+   - Otsu's method: Automatic threshold selection based on image histogram
+   - Adaptive Gaussian/Mean: Local thresholding for varying illumination
+
+2. **Preprocessing**: Reduces image noise
+   - Gaussian blur: Smooths out small noise artifacts
+   - Non-local means denoising: Advanced noise reduction
+
+3. **Color Calibration**: Corrects for camera/display color differences
+   - Generate a calibration card with all palette colors
+   - Photograph the card under the same conditions as your QR code
+   - Compute and apply color correction
 
 ## Requirements
 
