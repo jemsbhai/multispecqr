@@ -4,7 +4,7 @@ from .__about__ import __version__
 # Public API
 from .encoder import encode_rgb, encode_layers
 from .decoder import decode_rgb, decode_layers
-from .palette import palette_6, inverse_palette_6
+from .palette import palette_6, inverse_palette_6, palette_8, inverse_palette_8, palette_9, inverse_palette_9
 from .calibration import generate_calibration_card, compute_calibration, apply_calibration
 
 # ML decoder is optional - import fails gracefully if torch not installed
@@ -23,6 +23,10 @@ __all__ = [
     "decode_layers",
     "palette_6",
     "inverse_palette_6",
+    "palette_8",
+    "inverse_palette_8",
+    "palette_9",
+    "inverse_palette_9",
     "generate_calibration_card",
     "compute_calibration",
     "apply_calibration",

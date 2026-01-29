@@ -96,12 +96,50 @@ class TestCLIEncodePalette:
         assert output.exists()
         assert "palette (6 layers)" in result.stdout
 
-    def test_encode_palette_rejects_seven_layers(self, tmp_path):
-        """Palette mode should reject more than 6 layers."""
+    def test_encode_palette_rejects_ten_layers(self, tmp_path):
+        """Palette mode should reject more than 9 layers."""
         output = tmp_path / "test.png"
-        result = run_cli("encode", "1", "2", "3", "4", "5", "6", "7", str(output), "-m", "palette")
+        result = run_cli("encode", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", str(output), "-m", "palette")
         assert result.returncode == 1
-        assert "1-6 payloads" in result.stderr
+        assert "1-9 payloads" in result.stderr
+
+
+class TestCLIEncodeExpandedCapacity:
+    """Test CLI encode command with expanded capacity (7-9 layers)."""
+
+    def test_encode_palette_seven_layers(self, tmp_path):
+        """Palette mode should work with 7 layers."""
+        output = tmp_path / "test.png"
+        result = run_cli("encode", "A", "B", "C", "D", "E", "F", "G", str(output), "-m", "palette")
+        assert result.returncode == 0
+        assert output.exists()
+        assert "palette (7 layers)" in result.stdout
+
+    def test_encode_palette_eight_layers(self, tmp_path):
+        """Palette mode should work with 8 layers."""
+        output = tmp_path / "test.png"
+        result = run_cli("encode", "1", "2", "3", "4", "5", "6", "7", "8", str(output), "-m", "palette")
+        assert result.returncode == 0
+        assert output.exists()
+        assert "palette (8 layers)" in result.stdout
+
+    def test_encode_palette_nine_layers(self, tmp_path):
+        """Palette mode should work with 9 layers."""
+        output = tmp_path / "test.png"
+        result = run_cli("encode", "A", "B", "C", "D", "E", "F", "G", "H", "I", str(output), "-m", "palette", "-v", "3")
+        assert result.returncode == 0
+        assert output.exists()
+        assert "palette (9 layers)" in result.stdout
+
+    def test_decode_palette_nine_layers_roundtrip(self, tmp_path):
+        """Decode should recover 9-layer palette data."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "A", "B", "C", "D", "E", "F", "G", "H", "I", str(output), "-m", "palette", "-v", "4")
+
+        result = run_cli("decode", str(output), "-m", "palette", "-l", "9")
+        assert result.returncode == 0
+        assert "L1: 'A'" in result.stdout
+        assert "L9: 'I'" in result.stdout
 
 
 class TestCLIDecodeRGB:
@@ -148,6 +186,150 @@ class TestCLIDecodePalette:
         assert "L6: 'F'" in result.stdout
 
 
+class TestCLIRobustnessOptions:
+    """Test CLI robustness options for decoding."""
+
+    def test_decode_with_threshold_otsu(self, tmp_path):
+        """Decode should accept --threshold otsu option."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "R", "G", "B", str(output))
+
+        result = run_cli("decode", str(output), "--threshold", "otsu")
+        assert result.returncode == 0
+        assert "R: 'R'" in result.stdout
+
+    def test_decode_with_threshold_adaptive(self, tmp_path):
+        """Decode should accept --threshold adaptive_gaussian option."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "R", "G", "B", str(output))
+
+        result = run_cli("decode", str(output), "-t", "adaptive_gaussian")
+        assert result.returncode == 0
+
+    def test_decode_with_preprocess_blur(self, tmp_path):
+        """Decode should accept --preprocess blur option."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "R", "G", "B", str(output))
+
+        result = run_cli("decode", str(output), "--preprocess", "blur")
+        assert result.returncode == 0
+
+    def test_decode_with_preprocess_denoise(self, tmp_path):
+        """Decode should accept --preprocess denoise option."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "R", "G", "B", str(output))
+
+        result = run_cli("decode", str(output), "-p", "denoise")
+        assert result.returncode == 0
+
+    def test_decode_palette_with_robustness(self, tmp_path):
+        """Palette decode should work with preprocess option."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "A", "B", "C", str(output), "-m", "palette")
+
+        # Palette mode supports preprocess but not threshold (uses color matching)
+        result = run_cli("decode", str(output), "-m", "palette", "-l", "3", "-p", "blur")
+        assert result.returncode == 0
+
+
+class TestCLIOutputFormats:
+    """Test CLI output format options."""
+
+    def test_decode_json_output(self, tmp_path):
+        """Decode should support --json output format."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "Red", "Green", "Blue", str(output))
+
+        result = run_cli("decode", str(output), "--json")
+        assert result.returncode == 0
+        # Should output valid JSON
+        import json
+        data = json.loads(result.stdout)
+        assert data["R"] == "Red"
+        assert data["G"] == "Green"
+        assert data["B"] == "Blue"
+
+    def test_decode_json_palette(self, tmp_path):
+        """Palette decode should support --json output."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "A", "B", "C", str(output), "-m", "palette")
+
+        result = run_cli("decode", str(output), "-m", "palette", "-l", "3", "--json")
+        assert result.returncode == 0
+        import json
+        data = json.loads(result.stdout)
+        assert data["L1"] == "A"
+        assert data["L2"] == "B"
+        assert data["L3"] == "C"
+
+
+class TestCLIEncodingOptions:
+    """Test additional encoding options."""
+
+    def test_encode_with_scale(self, tmp_path):
+        """Encode should support --scale option."""
+        output = tmp_path / "test.png"
+        result = run_cli("encode", "A", "B", "C", str(output), "--scale", "10")
+        assert result.returncode == 0
+        assert output.exists()
+
+        # Verify image is larger than default
+        from PIL import Image
+        img = Image.open(output)
+        assert img.width > 100  # Should be scaled up
+
+
+class TestCLICalibration:
+    """Test CLI calibration features."""
+
+    def test_calibrate_command(self, tmp_path):
+        """calibrate command should generate a calibration card."""
+        output = tmp_path / "calibration.png"
+        result = run_cli("calibrate", str(output))
+        assert result.returncode == 0
+        assert output.exists()
+        assert "calibration card" in result.stdout.lower()
+
+    def test_calibrate_with_patch_size(self, tmp_path):
+        """calibrate command should accept --patch-size option."""
+        output = tmp_path / "calibration.png"
+        result = run_cli("calibrate", str(output), "--patch-size", "30")
+        assert result.returncode == 0
+        assert output.exists()
+
+
+class TestCLIBatchProcessing:
+    """Test CLI batch processing features."""
+
+    def test_batch_decode(self, tmp_path):
+        """batch-decode should decode multiple images."""
+        # Create two encoded images
+        img1 = tmp_path / "img1.png"
+        img2 = tmp_path / "img2.png"
+        run_cli("encode", "A1", "B1", "C1", str(img1))
+        run_cli("encode", "A2", "B2", "C2", str(img2))
+
+        # Batch decode
+        result = run_cli("batch-decode", str(img1), str(img2))
+        assert result.returncode == 0
+        assert "img1.png" in result.stdout
+        assert "img2.png" in result.stdout
+        assert "A1" in result.stdout
+        assert "A2" in result.stdout
+
+    def test_batch_decode_json(self, tmp_path):
+        """batch-decode should support --json output."""
+        img1 = tmp_path / "img1.png"
+        run_cli("encode", "X", "Y", "Z", str(img1))
+
+        result = run_cli("batch-decode", str(img1), "--json")
+        assert result.returncode == 0
+        import json
+        data = json.loads(result.stdout)
+        assert isinstance(data, list)
+        assert len(data) == 1
+
+
 class TestCLIEdgeCases:
     """Test CLI edge cases and error handling."""
 
@@ -159,4 +341,20 @@ class TestCLIEdgeCases:
     def test_no_command(self):
         """CLI should require a command."""
         result = run_cli()
+        assert result.returncode != 0
+
+    def test_invalid_threshold_method(self, tmp_path):
+        """Decode should reject invalid threshold method."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "R", "G", "B", str(output))
+
+        result = run_cli("decode", str(output), "--threshold", "invalid")
+        assert result.returncode != 0
+
+    def test_invalid_preprocess_method(self, tmp_path):
+        """Decode should reject invalid preprocess method."""
+        output = tmp_path / "test.png"
+        run_cli("encode", "R", "G", "B", str(output))
+
+        result = run_cli("decode", str(output), "--preprocess", "invalid")
         assert result.returncode != 0
