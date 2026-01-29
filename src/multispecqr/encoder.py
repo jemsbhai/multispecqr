@@ -1,8 +1,9 @@
 """
-Multispectral QR – RGB encoder prototype.
+Multispectral QR encoder.
 
 Provides:
     encode_rgb(data_r, data_g, data_b, version=4, ec="M") -> PIL.Image
+    encode_layers(data_list, version=4, ec="M") -> PIL.Image
 """
 from __future__ import annotations
 
@@ -10,7 +11,9 @@ import numpy as np
 from PIL import Image
 import qrcode
 
-# ----------------------------------------------------------------------
+from .palette import _select_palette
+
+
 def _make_layer(data: str, version: int, ec: str) -> np.ndarray:
     """Return a binary (0/1) numpy array for one QR layer."""
     qr = qrcode.QRCode(
@@ -22,7 +25,7 @@ def _make_layer(data: str, version: int, ec: str) -> np.ndarray:
     img = qr.make_image(fill_color="black", back_color="white").convert("1")
     return (np.array(img) == 0).astype(np.uint8)  # 1 = black module
 
-# ----------------------------------------------------------------------
+
 def encode_rgb(
     data_r: str,
     data_g: str,
@@ -36,6 +39,16 @@ def encode_rgb(
 
     Each payload is encoded as an independent monochrome QR layer,
     then assigned to one color channel: R, G, B.
+
+    Args:
+        data_r: Payload string for Red channel
+        data_g: Payload string for Green channel
+        data_b: Payload string for Blue channel
+        version: QR code version 1-40. Higher versions hold more data. Default: 4
+        ec: Error correction level - "L", "M", "Q", or "H". Default: "M"
+
+    Returns:
+        PIL.Image in RGB mode
     """
     r = _make_layer(data_r, version, ec)
     g = _make_layer(data_g, version, ec)
@@ -48,9 +61,6 @@ def encode_rgb(
     return Image.fromarray(rgb_stack)
 
 
-
-from .palette import _select_palette
-
 def encode_layers(data_list: list[str], *, version: int = 4, ec: str = "M") -> Image.Image:
     """
     Encode N binary QR layers into a color QR using an appropriate color palette.
@@ -62,8 +72,8 @@ def encode_layers(data_list: list[str], *, version: int = 4, ec: str = "M") -> I
 
     Args:
         data_list: List of payload strings (1-9 layers)
-        version: QR code version 1-40
-        ec: Error correction level ("L", "M", "Q", "H")
+        version: QR code version 1-40. Default: 4
+        ec: Error correction level ("L", "M", "Q", "H"). Default: "M"
 
     Returns:
         PIL.Image in RGB mode
@@ -94,9 +104,3 @@ def encode_layers(data_list: list[str], *, version: int = 4, ec: str = "M") -> I
             img_arr[y, x] = codebook.get(key, (255, 255, 255))  # default to white
 
     return Image.fromarray(img_arr)
-
-
-
-
-
-"""QR layer encoder — to be implemented."""

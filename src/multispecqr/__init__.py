@@ -1,3 +1,4 @@
+"""multispecqr - Multi-spectral QR codes with multiple data layers."""
 
 from .__about__ import __version__
 
