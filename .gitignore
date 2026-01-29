@@ -21,3 +21,6 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Research (private)
+RESEARCH_ROADMAP.md
