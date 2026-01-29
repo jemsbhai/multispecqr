@@ -10,6 +10,7 @@
 - **3-Layer RGB Mode**: Encode 3 independent payloads using Red, Green, and Blue channels
 - **6-Layer Palette Mode**: Encode up to 6 independent payloads using a 64-color palette
 - **Robustness Features**: Adaptive thresholding, preprocessing, and color calibration for real-world images
+- **ML-Based Decoder**: Optional neural network-based decoder for improved robustness (requires PyTorch)
 - **Full round-trip support**: Encode and decode with high fidelity
 - **Simple API**: Easy-to-use Python functions for encoding and decoding
 - **CLI included**: Full-featured command-line interface for quick operations
@@ -100,6 +101,32 @@ calibration = compute_calibration(card, photographed_card)
 decoded = decode_layers(qr_image, calibration=calibration)
 ```
 
+#### ML-Based Decoder (Optional)
+
+For improved robustness with noisy or distorted images, use the neural network-based decoder:
+
+```bash
+# Install with ML dependencies
+pip install multispecqr[ml]
+```
+
+```python
+from multispecqr import decode_rgb, decode_layers
+
+# Use ML-based decoding for RGB mode
+decoded = decode_rgb(img, method="ml")
+
+# Use ML-based decoding for palette mode
+decoded = decode_layers(img, num_layers=6, method="ml")
+```
+
+The ML decoder uses a lightweight CNN to unmix color layers, providing better robustness for:
+- Images with compression artifacts (JPEG)
+- Photos with color distortion
+- Noisy or low-quality images
+
+Note: The ML decoder requires training for optimal results. Out of the box, it provides basic functionality with untrained weights.
+
 ### Command Line Interface
 
 The CLI supports both RGB and palette modes with full control over QR code parameters.
@@ -183,7 +210,7 @@ Encode 1-6 payloads using the 64-color palette system.
 
 ### Decoding Functions
 
-#### `decode_rgb(img, *, threshold_method="global", preprocess=None, calibration=None)`
+#### `decode_rgb(img, *, threshold_method="global", preprocess=None, calibration=None, method="threshold")`
 
 Decode an RGB QR code back into three payloads.
 
@@ -198,10 +225,13 @@ Decode an RGB QR code back into three payloads.
   - `"blur"`: Gaussian blur to reduce noise
   - `"denoise"`: Non-local means denoising
 - **calibration** (`dict | None`): Calibration data from `compute_calibration()`
+- **method** (`str`): Decoding method:
+  - `"threshold"`: Traditional threshold-based decoding (default)
+  - `"ml"`: ML-based decoder using neural network (requires PyTorch)
 - **Returns**: `list[str]` of 3 strings (R, G, B channels). Empty string for failed layers.
-- **Raises**: `ValueError` if image is not RGB mode
+- **Raises**: `ValueError` if image is not RGB mode; `ImportError` if method="ml" but PyTorch not installed
 
-#### `decode_layers(img, num_layers=None, *, preprocess=None, calibration=None)`
+#### `decode_layers(img, num_layers=None, *, preprocess=None, calibration=None, method="threshold")`
 
 Decode a palette-encoded QR code.
 
@@ -209,8 +239,11 @@ Decode a palette-encoded QR code.
 - **num_layers** (`int | None`): Number of layers to decode (1-6). Default: 6
 - **preprocess** (`str | None`): Optional preprocessing (same options as `decode_rgb`)
 - **calibration** (`dict | None`): Calibration data from `compute_calibration()`
+- **method** (`str`): Decoding method:
+  - `"threshold"`: Traditional threshold-based decoding (default)
+  - `"ml"`: ML-based decoder using neural network (requires PyTorch)
 - **Returns**: `list[str]` of decoded strings. Empty string for failed layers.
-- **Raises**: `ValueError` if image is not RGB mode
+- **Raises**: `ValueError` if image is not RGB mode; `ImportError` if method="ml" but PyTorch not installed
 
 ### Calibration Functions
 
@@ -296,13 +329,57 @@ For real-world usage (photographed QR codes), the library provides:
    - Photograph the card under the same conditions as your QR code
    - Compute and apply color correction
 
+4. **ML-Based Decoder** (optional): Neural network-based color unmixing
+   - Lightweight CNN architecture for layer separation
+   - Trainable on synthetic data for improved robustness
+   - Handles compression artifacts and color distortion
+
+### ML Decoder Architecture
+
+The ML decoder uses a lightweight encoder-decoder CNN:
+
+```
+Input RGB Image (H x W x 3)
+    ↓
+Encoder: Conv layers → 32 → 64 channels
+    ↓
+Decoder: Conv layers → 32 channels
+    ↓
+Output: 6 layer masks (H x W x 6)
+```
+
+The network learns to unmix the 64-color palette back into 6 independent binary layers. It can be trained using generated synthetic data:
+
+```python
+from multispecqr.ml_decoder import MLDecoder, generate_training_batch
+
+# Create decoder
+decoder = MLDecoder()
+
+# Train for a few epochs
+for epoch in range(10):
+    loss = decoder.train_epoch(num_samples=100)
+    print(f"Epoch {epoch}: loss = {loss:.4f}")
+
+# Use trained decoder
+from multispecqr import decode_layers
+decoded = decode_layers(img, method="ml")
+```
+
 ## Requirements
 
+**Core dependencies:**
 - Python 3.9+
 - opencv-python
 - qrcode[pil]
 - numpy
 - Pillow
+
+**Optional ML dependencies (for neural network decoder):**
+```bash
+pip install multispecqr[ml]
+```
+- torch (PyTorch)
 
 ## License
 

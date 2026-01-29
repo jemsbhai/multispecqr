@@ -7,6 +7,14 @@ from .decoder import decode_rgb, decode_layers
 from .palette import palette_6, inverse_palette_6
 from .calibration import generate_calibration_card, compute_calibration, apply_calibration
 
+# ML decoder is optional - import fails gracefully if torch not installed
+try:
+    from . import ml_decoder
+    _ml_available = True
+except ImportError:
+    ml_decoder = None  # type: ignore
+    _ml_available = False
+
 __all__ = [
     "__version__",
     "encode_rgb",
@@ -18,4 +26,5 @@ __all__ = [
     "generate_calibration_card",
     "compute_calibration",
     "apply_calibration",
+    "ml_decoder",
 ]
