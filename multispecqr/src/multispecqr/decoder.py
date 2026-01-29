@@ -1,16 +1,79 @@
 """
-Multispectral QR – baseline RGB decoder.
+Multispectral QR – RGB and palette decoders with robustness features.
 
-Function:
-    decode_rgb(img) -> list[str]
+Functions:
+    decode_rgb(img, threshold_method, preprocess, calibration) -> list[str]
+    decode_layers(img, num_layers, preprocess, calibration) -> list[str]
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Literal, Any
 
 import numpy as np
 import cv2
 from PIL import Image
+
+
+# Valid threshold methods
+ThresholdMethod = Literal["global", "otsu", "adaptive_gaussian", "adaptive_mean"]
+
+# Valid preprocessing options
+PreprocessMethod = Literal["none", "blur", "denoise"]
+
+
+def _apply_preprocessing(arr: np.ndarray, method: PreprocessMethod) -> np.ndarray:
+    """Apply preprocessing to an image array."""
+    if method == "none" or method is None:
+        return arr
+    elif method == "blur":
+        # Gaussian blur to reduce noise
+        return cv2.GaussianBlur(arr, (3, 3), 0)
+    elif method == "denoise":
+        # Non-local means denoising
+        if len(arr.shape) == 3:
+            return cv2.fastNlMeansDenoisingColored(arr, None, 10, 10, 7, 21)
+        else:
+            return cv2.fastNlMeansDenoising(arr, None, 10, 7, 21)
+    else:
+        return arr
+
+
+def _apply_threshold(
+    channel: np.ndarray,
+    method: ThresholdMethod = "global",
+) -> np.ndarray:
+    """
+    Apply thresholding to a single channel image.
+
+    Args:
+        channel: Grayscale image (H x W)
+        method: Thresholding method to use
+
+    Returns:
+        Binary image (0 or 255)
+    """
+    if method == "global":
+        # Simple global threshold at 128
+        _, binary = cv2.threshold(channel, 128, 255, cv2.THRESH_BINARY_INV)
+    elif method == "otsu":
+        # Otsu's automatic threshold selection
+        _, binary = cv2.threshold(channel, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    elif method == "adaptive_gaussian":
+        # Adaptive threshold using Gaussian-weighted mean
+        binary = cv2.adaptiveThreshold(
+            channel, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
+        )
+    elif method == "adaptive_mean":
+        # Adaptive threshold using mean of neighborhood
+        binary = cv2.adaptiveThreshold(
+            channel, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 11, 2
+        )
+    else:
+        raise ValueError(
+            f"Invalid threshold_method: {method}. "
+            f"Must be one of: global, otsu, adaptive_gaussian, adaptive_mean"
+        )
+    return binary
 
 
 def _decode_single_layer(layer_img: np.ndarray) -> str | None:
@@ -23,39 +86,93 @@ def _decode_single_layer(layer_img: np.ndarray) -> str | None:
     return data or None
 
 
-def decode_rgb(img: Image.Image) -> List[str]:
+def decode_rgb(
+    img: Image.Image,
+    *,
+    threshold_method: ThresholdMethod = "global",
+    preprocess: PreprocessMethod | None = None,
+    calibration: dict[str, Any] | None = None,
+) -> List[str]:
     """
     Split an RGB QR image into R, G, B layers, threshold each,
     and return a list of decoded strings (order: R, G, B).
 
-    Layers that fail to decode are returned as an empty string.
+    Args:
+        img: PIL Image in RGB mode
+        threshold_method: Thresholding algorithm to use:
+            - "global": Simple threshold at 128 (default, fastest)
+            - "otsu": Otsu's automatic threshold selection
+            - "adaptive_gaussian": Adaptive threshold with Gaussian weights
+            - "adaptive_mean": Adaptive threshold with mean of neighborhood
+        preprocess: Optional preprocessing:
+            - None or "none": No preprocessing
+            - "blur": Gaussian blur to reduce noise
+            - "denoise": Non-local means denoising
+        calibration: Optional calibration data from compute_calibration()
+
+    Returns:
+        List of 3 decoded strings (R, G, B). Empty string for failed layers.
+
+    Raises:
+        ValueError: If image is not RGB mode or invalid threshold_method
     """
     if img.mode != "RGB":
         raise ValueError("Expected an RGB image")
 
+    # Validate threshold method
+    valid_methods = {"global", "otsu", "adaptive_gaussian", "adaptive_mean"}
+    if threshold_method not in valid_methods:
+        raise ValueError(
+            f"Invalid threshold_method: {threshold_method}. "
+            f"Must be one of: {', '.join(valid_methods)}"
+        )
+
+    # Apply calibration if provided
+    if calibration is not None:
+        from .calibration import apply_calibration
+        img = apply_calibration(img, calibration)
+
     arr = np.array(img)  # H x W x 3
+
+    # Apply preprocessing if specified
+    if preprocess and preprocess != "none":
+        arr = _apply_preprocessing(arr, preprocess)
+
     results: List[str] = []
 
     for c in range(3):  # R, G, B
         channel = arr[:, :, c]
-        # Simple global threshold: treat <128 as black
-        _, binary = cv2.threshold(channel, 128, 255, cv2.THRESH_BINARY_INV)
+        binary = _apply_threshold(channel, threshold_method)
         decoded = _decode_single_layer(binary)
         results.append(decoded or "")
 
     return results
 
 
-def decode_layers(img: Image.Image, num_layers: int | None = None) -> List[str]:
+def decode_layers(
+    img: Image.Image,
+    num_layers: int | None = None,
+    *,
+    preprocess: PreprocessMethod | None = None,
+    calibration: dict[str, Any] | None = None,
+) -> List[str]:
     """
     Decode a multi-layer QR image encoded with the 6-color palette.
 
     Args:
         img: RGB PIL Image encoded with encode_layers()
-        num_layers: Number of layers to decode (1-6). If None, auto-detect.
+        num_layers: Number of layers to decode (1-6). If None, defaults to 6.
+        preprocess: Optional preprocessing:
+            - None or "none": No preprocessing
+            - "blur": Gaussian blur to reduce noise
+            - "denoise": Non-local means denoising
+        calibration: Optional calibration data from compute_calibration()
 
     Returns:
-        List of decoded strings, one per layer.
+        List of decoded strings, one per layer. Empty string for failed layers.
+
+    Raises:
+        ValueError: If image is not RGB mode
     """
     from .palette import inverse_palette_6
 
@@ -66,19 +183,29 @@ def decode_layers(img: Image.Image, num_layers: int | None = None) -> List[str]:
     if num_layers is None:
         num_layers = 6
 
+    # Apply calibration if provided
+    if calibration is not None:
+        from .calibration import apply_calibration
+        img = apply_calibration(img, calibration)
+
     arr = np.array(img)  # H x W x 3
+
+    # Apply preprocessing if specified
+    if preprocess and preprocess != "none":
+        arr = _apply_preprocessing(arr, preprocess)
+
     h, w = arr.shape[:2]
 
     # Build inverse lookup and color array for nearest-neighbor matching
     inv_palette = inverse_palette_6()
-    palette_colors = np.array(list(inv_palette.keys()), dtype=np.uint8)  # (7, 3)
+    palette_colors = np.array(list(inv_palette.keys()), dtype=np.uint8)  # (64, 3)
     palette_bitvecs = list(inv_palette.values())
 
     # Reshape image for efficient color matching
     pixels = arr.reshape(-1, 3)  # (H*W, 3)
 
     # Find nearest palette color for each pixel using Euclidean distance
-    # Compute distances: (H*W, 7)
+    # Compute distances: (H*W, 64)
     distances = np.linalg.norm(
         pixels[:, np.newaxis, :].astype(np.float32) - palette_colors[np.newaxis, :, :].astype(np.float32),
         axis=2
