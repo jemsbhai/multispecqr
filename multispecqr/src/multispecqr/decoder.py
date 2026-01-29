@@ -2,8 +2,8 @@
 Multispectral QR – RGB and palette decoders with robustness features.
 
 Functions:
-    decode_rgb(img, threshold_method, preprocess, calibration) -> list[str]
-    decode_layers(img, num_layers, preprocess, calibration) -> list[str]
+    decode_rgb(img, threshold_method, preprocess, calibration, method) -> list[str]
+    decode_layers(img, num_layers, preprocess, calibration, method) -> list[str]
 """
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ ThresholdMethod = Literal["global", "otsu", "adaptive_gaussian", "adaptive_mean"
 
 # Valid preprocessing options
 PreprocessMethod = Literal["none", "blur", "denoise"]
+
+# Valid decoding methods
+DecodeMethod = Literal["threshold", "ml"]
 
 
 def _apply_preprocessing(arr: np.ndarray, method: PreprocessMethod) -> np.ndarray:
@@ -92,6 +95,7 @@ def decode_rgb(
     threshold_method: ThresholdMethod = "global",
     preprocess: PreprocessMethod | None = None,
     calibration: dict[str, Any] | None = None,
+    method: DecodeMethod = "threshold",
 ) -> List[str]:
     """
     Split an RGB QR image into R, G, B layers, threshold each,
@@ -109,15 +113,29 @@ def decode_rgb(
             - "blur": Gaussian blur to reduce noise
             - "denoise": Non-local means denoising
         calibration: Optional calibration data from compute_calibration()
+        method: Decoding method to use:
+            - "threshold": Traditional threshold-based decoding (default)
+            - "ml": ML-based decoder using neural network (requires torch)
 
     Returns:
         List of 3 decoded strings (R, G, B). Empty string for failed layers.
 
     Raises:
         ValueError: If image is not RGB mode or invalid threshold_method
+        ImportError: If method="ml" but torch is not installed
     """
     if img.mode != "RGB":
         raise ValueError("Expected an RGB image")
+
+    # Use ML-based decoder if requested
+    if method == "ml":
+        from .ml_decoder import decode_rgb_ml, is_torch_available
+        if not is_torch_available():
+            raise ImportError(
+                "PyTorch is required for ML decoder. "
+                "Install with: pip install multispecqr[ml]"
+            )
+        return decode_rgb_ml(img)
 
     # Validate threshold method
     valid_methods = {"global", "otsu", "adaptive_gaussian", "adaptive_mean"}
@@ -155,6 +173,7 @@ def decode_layers(
     *,
     preprocess: PreprocessMethod | None = None,
     calibration: dict[str, Any] | None = None,
+    method: DecodeMethod = "threshold",
 ) -> List[str]:
     """
     Decode a multi-layer QR image encoded with the 6-color palette.
@@ -167,12 +186,16 @@ def decode_layers(
             - "blur": Gaussian blur to reduce noise
             - "denoise": Non-local means denoising
         calibration: Optional calibration data from compute_calibration()
+        method: Decoding method to use:
+            - "threshold": Traditional threshold-based decoding (default)
+            - "ml": ML-based decoder using neural network (requires torch)
 
     Returns:
         List of decoded strings, one per layer. Empty string for failed layers.
 
     Raises:
         ValueError: If image is not RGB mode
+        ImportError: If method="ml" but torch is not installed
     """
     from .palette import inverse_palette_6
 
@@ -182,6 +205,16 @@ def decode_layers(
     # Default to 6 layers if not specified
     if num_layers is None:
         num_layers = 6
+
+    # Use ML-based decoder if requested
+    if method == "ml":
+        from .ml_decoder import decode_layers_ml, is_torch_available
+        if not is_torch_available():
+            raise ImportError(
+                "PyTorch is required for ML decoder. "
+                "Install with: pip install multispecqr[ml]"
+            )
+        return decode_layers_ml(img, num_layers=num_layers)
 
     # Apply calibration if provided
     if calibration is not None:
