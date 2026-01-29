@@ -175,14 +175,56 @@ python -m multispecqr encode "A" "B" "C" "D" "E" "F" "G" "H" output.png --mode p
 python -m multispecqr decode output.png --mode palette --layers 6
 ```
 
-#### Advanced Options
+#### Advanced Encoding Options
 
 ```bash
 # Encode with higher QR version (more capacity) and error correction
 python -m multispecqr encode "R" "G" "B" output.png --version 4 --ec H
 
+# Scale up output image (10x larger for printing)
+python -m multispecqr encode "R" "G" "B" output.png --scale 10
+
 # Short form options
-python -m multispecqr encode "R" "G" "B" output.png -v 4 -e H -m rgb
+python -m multispecqr encode "R" "G" "B" output.png -v 4 -e H -m rgb -s 10
+```
+
+#### Robustness Options for Decoding
+
+```bash
+# Decode with adaptive thresholding (for uneven lighting)
+python -m multispecqr decode image.png --threshold otsu
+
+# Decode with preprocessing (for noisy images)
+python -m multispecqr decode image.png --preprocess denoise
+
+# Combine options
+python -m multispecqr decode image.png -t adaptive_gaussian -p blur
+
+# Output results as JSON (for scripting)
+python -m multispecqr decode image.png --json
+```
+
+#### Calibration
+
+```bash
+# Generate a calibration card for color correction
+python -m multispecqr calibrate calibration.png
+
+# Generate with custom patch size
+python -m multispecqr calibrate calibration.png --patch-size 30
+```
+
+#### Batch Processing
+
+```bash
+# Decode multiple images at once
+python -m multispecqr batch-decode img1.png img2.png img3.png
+
+# Batch decode with JSON output
+python -m multispecqr batch-decode *.png --json
+
+# Batch decode palette mode images
+python -m multispecqr batch-decode *.png --mode palette --layers 6
 ```
 
 #### CLI Options Reference
@@ -193,12 +235,31 @@ python -m multispecqr encode "R" "G" "B" output.png -v 4 -e H -m rgb
 | `--mode` | `-m` | Encoding mode: `rgb` (3 layers) or `palette` (1-9 layers) | `rgb` |
 | `--version` | `-v` | QR code version (1-40). Higher = more capacity | `2` |
 | `--ec` | `-e` | Error correction: `L` (7%), `M` (15%), `Q` (25%), `H` (30%) | `M` |
+| `--scale` | `-s` | Scale factor for output image | `1` |
 
 **Decode command:**
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
 | `--mode` | `-m` | Decoding mode: `rgb` or `palette` | `rgb` |
 | `--layers` | `-l` | Number of layers to decode (palette mode, 1-9) | `6` |
+| `--threshold` | `-t` | Thresholding: `global`, `otsu`, `adaptive_gaussian`, `adaptive_mean` | `global` |
+| `--preprocess` | `-p` | Preprocessing: `none`, `blur`, `denoise` | `none` |
+| `--json` | `-j` | Output results as JSON | - |
+
+**Calibrate command:**
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--patch-size` | Size of color patches in pixels | `50` |
+| `--padding` | Padding between patches | `5` |
+
+**Batch-decode command:**
+| Option | Short | Description | Default |
+|--------|-------|-------------|---------|
+| `--mode` | `-m` | Decoding mode | `rgb` |
+| `--layers` | `-l` | Number of layers (palette mode) | `6` |
+| `--threshold` | `-t` | Thresholding method (RGB mode only) | `global` |
+| `--preprocess` | `-p` | Preprocessing method | `none` |
+| `--json` | `-j` | Output results as JSON | - |
 
 ## API Reference
 
