@@ -449,8 +449,9 @@ def _generate_palette_batch(
 # =============================================================================
 
 # Keep old names for backward compatibility
-MLDecoder = PaletteMLDecoder
-ColorUnmixingCNN = LayerUnmixingCNN
+if TORCH_AVAILABLE:
+    MLDecoder = PaletteMLDecoder
+    ColorUnmixingCNN = LayerUnmixingCNN
 
 
 def generate_training_sample(
