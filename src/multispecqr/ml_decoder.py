@@ -6,7 +6,7 @@ for real-world images with noise, compression artifacts, and color distortion.
 
 Provides two separate decoders:
 - RGBMLDecoder: For RGB-encoded images (3 layers)
-- PaletteMLDecoder: For palette-encoded images (6 layers)
+- PaletteMLDecoder: For palette-encoded images (6-9 layers)
 
 Requires optional 'ml' dependencies: pip install multispecqr[ml]
 """
@@ -32,6 +32,32 @@ except ImportError:
 def is_torch_available() -> bool:
     """Check if PyTorch is available."""
     return TORCH_AVAILABLE
+
+
+def _num_layers_to_model_bits(num_layers: int) -> int:
+    """
+    Map user-requested layers to the model output size.
+    
+    This matches the palette selection logic:
+    - 1-6 layers → 6-bit model (64-color palette)
+    - 7-8 layers → 8-bit model (256-color palette)
+    - 9 layers → 9-bit model (512-color palette)
+    
+    Args:
+        num_layers: Number of data layers (1-9)
+        
+    Returns:
+        Number of model output channels (6, 8, or 9)
+    """
+    if num_layers < 1 or num_layers > 9:
+        raise ValueError(f"num_layers must be 1-9, got {num_layers}")
+    
+    if num_layers <= 6:
+        return 6
+    elif num_layers <= 8:
+        return 8
+    else:
+        return 9
 
 
 def _detect_nvidia_gpu() -> bool:
@@ -95,7 +121,7 @@ if TORCH_AVAILABLE:
         """
         CNN for unmixing multi-spectral QR code colors.
         
-        Configurable output channels for RGB (3) or palette (6) modes.
+        Configurable output channels for RGB (3) or palette (6/8/9) modes.
         """
 
         def __init__(self, num_outputs: int = 6):
@@ -261,26 +287,52 @@ class PaletteMLDecoder(_BaseMLDecoder):
     """
     ML decoder for palette-encoded QR codes.
     
-    Outputs 6 binary layers corresponding to the 6-bit palette encoding.
+    Supports 1-9 layers with automatic palette selection:
+    - 1-6 layers: 64-color palette (6-bit model)
+    - 7-8 layers: 256-color palette (8-bit model)
+    - 9 layers: 512-color palette (9-bit model)
+    
+    Args:
+        num_layers: Number of data layers to decode (1-9). Default is 6.
+        device: Device to run on ('cuda' or 'cpu'). Auto-detected if None.
+    
+    Example:
+        >>> decoder = PaletteMLDecoder(num_layers=6)
+        >>> for epoch in range(10):
+        ...     loss = decoder.train_epoch(num_samples=100)
+        >>> results = decoder.decode(image)
     """
     
-    def __init__(self, device: str | None = None):
-        super().__init__(num_outputs=6, device=device)
+    def __init__(self, num_layers: int = 6, device: str | None = None):
+        if num_layers < 1 or num_layers > 9:
+            raise ValueError(f"num_layers must be 1-9, got {num_layers}")
+        
+        self.num_layers = num_layers
+        self.model_bits = _num_layers_to_model_bits(num_layers)
+        
+        super().__init__(num_outputs=self.model_bits, device=device)
     
     def train_epoch(
         self,
         num_samples: int = 100,
         batch_size: int = 8,
         version: int = 1,
-        num_layers: int = 6,
     ) -> float:
-        """Train for one epoch using generated palette data."""
+        """
+        Train for one epoch using generated palette data.
+        
+        Training uses the full model_bits (6, 8, or 9) even if num_layers
+        is less, to match the actual palette encoding.
+        """
         self.model.train()
         total_loss = 0.0
         num_batches = (num_samples + batch_size - 1) // batch_size
 
         for _ in range(num_batches):
-            images, labels = _generate_palette_batch(batch_size, version, num_layers)
+            # Generate training data using full model bits
+            images, labels = _generate_palette_batch(
+                batch_size, version, self.model_bits
+            )
 
             x = torch.from_numpy(images.transpose(0, 3, 1, 2)).float().to(self.device) / 255.0
             y = torch.from_numpy(labels.transpose(0, 3, 1, 2)).float().to(self.device)
@@ -295,9 +347,28 @@ class PaletteMLDecoder(_BaseMLDecoder):
 
         return total_loss / num_batches
     
-    def decode(self, img: Image.Image, num_layers: int = 6) -> List[str]:
-        """Decode a palette QR code into up to 6 strings."""
+    def decode(self, img: Image.Image, num_layers: int | None = None) -> List[str]:
+        """
+        Decode a palette QR code.
+        
+        Args:
+            img: PIL Image to decode
+            num_layers: Override number of layers to return (default: use init value)
+            
+        Returns:
+            List of decoded strings, one per layer
+        """
         import cv2
+        
+        if num_layers is None:
+            num_layers = self.num_layers
+        
+        # Validate requested layers don't exceed model capacity
+        if num_layers > self.model_bits:
+            raise ValueError(
+                f"Cannot decode {num_layers} layers with a {self.model_bits}-bit model. "
+                f"Create a new decoder with num_layers={num_layers}."
+            )
         
         layers = self.predict_layers(img)
         
@@ -382,50 +453,52 @@ def _generate_palette_sample(
     version: int = 1,
     num_layers: int = 6,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Generate a single palette training sample."""
+    """
+    Generate a single palette training sample.
+    
+    Args:
+        version: QR code version
+        num_layers: Number of bits/layers (6, 8, or 9)
+        
+    Returns:
+        (image, labels) tuple where labels has shape (h, w, num_layers)
+    """
     from .encoder import _make_layer
-    from .palette import palette_6
+    from .palette import palette_6, palette_8, palette_9
 
     import random
     import string
 
+    # Select appropriate palette
+    if num_layers <= 6:
+        codebook = palette_6()
+        num_bits = 6
+    elif num_layers <= 8:
+        codebook = palette_8()
+        num_bits = 8
+    else:
+        codebook = palette_9()
+        num_bits = 9
+
+    # Generate random data for each layer
     data_list = []
-    for _ in range(num_layers):
+    for _ in range(num_bits):
         length = random.randint(3, 8)
         data = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
         data_list.append(data)
 
-    while len(data_list) < 6:
-        data_list.append("")
-
-    layers = []
-    for data in data_list:
-        if data:
-            layer = _make_layer(data, version, "M")
-            layers.append(layer)
-        elif layers:
-            layers.append(np.zeros_like(layers[0]))
-
-    if not layers:
-        raise ValueError("At least one layer must have data")
-
+    # Generate QR layers
+    layers = [_make_layer(d, version, "M") for d in data_list]
     h, w = layers[0].shape
 
-    codebook = palette_6()
+    # Build image and labels
     image = np.zeros((h, w, 3), dtype=np.uint8)
-    labels = np.zeros((h, w, 6), dtype=np.uint8)
+    labels = np.zeros((h, w, num_bits), dtype=np.uint8)
 
     for y in range(h):
         for x in range(w):
-            bits = []
-            for i in range(6):
-                if i < len(layers):
-                    bits.append(int(layers[i][y, x]))
-                else:
-                    bits.append(0)
-
-            key = tuple(bits)
-            color = codebook.get(key, (255, 255, 255))
+            bits = tuple(int(layers[i][y, x]) for i in range(num_bits))
+            color = codebook.get(bits, (255, 255, 255))
             image[y, x] = color
             labels[y, x] = bits
 
@@ -515,9 +588,9 @@ def decode_layers_ml(
     """
     Decode palette-encoded QR code using ML-based layer separation.
     
-    For best results, use a trained PaletteMLDecoder.
+    For best results, use a trained PaletteMLDecoder with matching num_layers.
     """
     if decoder is None:
-        decoder = PaletteMLDecoder()
+        decoder = PaletteMLDecoder(num_layers=num_layers)
     
     return decoder.decode(img, num_layers=num_layers)
