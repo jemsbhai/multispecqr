@@ -11,6 +11,8 @@ python 02_palette_mode.py
 python 03_robustness.py
 python 04_calibration.py
 python 05_batch_processing.py
+python 06_advanced_options.py
+python 07_ml_decoder_training.py  # Requires: pip install multispecqr[ml]
 ```
 
 ## Examples Overview
@@ -22,6 +24,8 @@ python 05_batch_processing.py
 | `03_robustness.py` | Threshold methods and preprocessing for noisy images |
 | `04_calibration.py` | Color calibration workflow for printed QR codes |
 | `05_batch_processing.py` | Process multiple QR codes in batch |
+| `06_advanced_options.py` | QR parameters, scaling, file I/O, ML decoder |
+| `07_ml_decoder_training.py` | ML decoder training and comprehensive evaluation |
 
 ## CLI Examples
 

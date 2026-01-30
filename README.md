@@ -115,29 +115,56 @@ decoded = decode_layers(qr_image, calibration=calibration)
 
 #### ML-Based Decoder (Optional)
 
-For improved robustness with noisy or distorted images, use the neural network-based decoder:
+For improved robustness with noisy or distorted images, use the neural network-based decoder.
+
+**Installation:**
 
 ```bash
-# Install with ML dependencies
+# CPU installation (works everywhere)
 pip install multispecqr[ml]
+
+# GPU installation (much faster training - recommended if you have NVIDIA GPU)
+pip install multispecqr[ml]
+pip uninstall torch torchvision -y
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
+
+> **Note:** If you have an NVIDIA GPU but installed the CPU version, the library will detect this and show upgrade instructions.
+
+**Training and Usage:**
+
+The ML decoder uses separate models for RGB and palette modes:
 
 ```python
-from multispecqr import decode_rgb, decode_layers
+from multispecqr.ml_decoder import RGBMLDecoder, PaletteMLDecoder
 
-# Use ML-based decoding for RGB mode
-decoded = decode_rgb(img, method="ml")
+# For RGB mode (3 layers)
+rgb_decoder = RGBMLDecoder()  # Auto-detects GPU
+for epoch in range(50):
+    loss = rgb_decoder.train_epoch(num_samples=200, version=2)
+    if (epoch + 1) % 10 == 0:
+        print(f"Epoch {epoch + 1}: loss = {loss:.4f}")
 
-# Use ML-based decoding for palette mode
-decoded = decode_layers(img, num_layers=6, method="ml")
+# Decode RGB image
+result = rgb_decoder.decode(img)  # Returns ['R data', 'G data', 'B data']
+
+# For palette mode (6 layers)
+palette_decoder = PaletteMLDecoder()  # Auto-detects GPU
+for epoch in range(50):
+    loss = palette_decoder.train_epoch(num_samples=200, version=2)
+    if (epoch + 1) % 10 == 0:
+        print(f"Epoch {epoch + 1}: loss = {loss:.4f}")
+
+# Decode palette image
+result = palette_decoder.decode(img, num_layers=6)  # Returns 6 strings
 ```
 
-The ML decoder uses a lightweight CNN to unmix color layers, providing better robustness for:
+The ML decoders use lightweight CNNs to unmix color layers, providing better robustness for:
 - Images with compression artifacts (JPEG)
 - Photos with color distortion
 - Noisy or low-quality images
 
-Note: The ML decoder requires training for optimal results. Out of the box, it provides basic functionality with untrained weights.
+> **Important:** The ML decoders require training before use. Untrained weights will not decode successfully. Use the same QR version for training and inference. See `examples/07_ml_decoder_training.py` for a complete training and evaluation example.
 
 ### Command Line Interface
 
@@ -453,8 +480,9 @@ For real-world usage (photographed QR codes), the library provides:
 
 ### ML Decoder Architecture
 
-The ML decoder uses a lightweight encoder-decoder CNN:
+The ML decoder uses separate models for RGB and palette modes, each with a lightweight encoder-decoder CNN:
 
+**RGBMLDecoder** (3 output channels):
 ```
 Input RGB Image (H x W x 3)
     ↓
@@ -462,25 +490,41 @@ Encoder: Conv layers → 32 → 64 channels
     ↓
 Decoder: Conv layers → 32 channels
     ↓
-Output: 6 layer masks (H x W x 6)
+Output: 3 layer masks (H x W x 3) → R, G, B channels
 ```
 
-The network learns to unmix the 64-color palette back into 6 independent binary layers. It can be trained using generated synthetic data:
+**PaletteMLDecoder** (6 output channels):
+```
+Input RGB Image (H x W x 3)
+    ↓
+Encoder: Conv layers → 32 → 64 channels
+    ↓
+Decoder: Conv layers → 32 channels
+    ↓
+Output: 6 layer masks (H x W x 6) → 6-bit palette decoding
+```
+
+Each network learns to unmix the color channels back into independent binary layers:
 
 ```python
-from multispecqr.ml_decoder import MLDecoder, generate_training_batch
+from multispecqr.ml_decoder import RGBMLDecoder, PaletteMLDecoder
 
-# Create decoder
-decoder = MLDecoder()
+# Train RGB decoder on synthetic data
+rgb_decoder = RGBMLDecoder()
+for epoch in range(50):
+    loss = rgb_decoder.train_epoch(num_samples=200, version=2)
+result = rgb_decoder.decode(img)
 
-# Train for a few epochs
-for epoch in range(10):
-    loss = decoder.train_epoch(num_samples=100)
-    print(f"Epoch {epoch}: loss = {loss:.4f}")
+# Train palette decoder on synthetic data
+palette_decoder = PaletteMLDecoder()
+for epoch in range(50):
+    loss = palette_decoder.train_epoch(num_samples=200, version=2)
+result = palette_decoder.decode(img, num_layers=6)
 
-# Use trained decoder
-from multispecqr import decode_layers
-decoded = decode_layers(img, method="ml")
+# Save/load weights for reuse
+import torch
+torch.save(rgb_decoder.model.state_dict(), 'rgb_weights.pth')
+rgb_decoder.model.load_state_dict(torch.load('rgb_weights.pth'))
 ```
 
 ## Requirements

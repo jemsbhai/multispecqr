@@ -1,8 +1,12 @@
 """
 ML-based decoder for multi-spectral QR codes.
 
-Uses a lightweight CNN to unmix color layers, providing better robustness
+Uses lightweight CNNs to unmix color layers, providing better robustness
 for real-world images with noise, compression artifacts, and color distortion.
+
+Provides two separate decoders:
+- RGBMLDecoder: For RGB-encoded images (3 layers)
+- PaletteMLDecoder: For palette-encoded images (6 layers)
 
 Requires optional 'ml' dependencies: pip install multispecqr[ml]
 """
@@ -30,17 +34,74 @@ def is_torch_available() -> bool:
     return TORCH_AVAILABLE
 
 
+def _detect_nvidia_gpu() -> bool:
+    """
+    Detect if an NVIDIA GPU is present on the system.
+    
+    Uses nvidia-smi to check for GPU presence, independent of PyTorch.
+    """
+    import subprocess
+    import shutil
+    
+    if shutil.which("nvidia-smi") is None:
+        return False
+    
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0 and len(result.stdout.strip()) > 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+def _check_gpu_advisory() -> None:
+    """Check if user has a GPU but PyTorch can't use it."""
+    if not TORCH_AVAILABLE:
+        return
+    
+    if torch.cuda.is_available():
+        return
+    
+    if not _detect_nvidia_gpu():
+        return
+    
+    import warnings
+    msg = (
+        "NVIDIA GPU detected but PyTorch is using CPU. "
+        "For faster ML decoding, install CUDA-enabled PyTorch: "
+        "pip uninstall torch torchvision -y && "
+        "pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124"
+    )
+    warnings.warn(msg, stacklevel=3)
+
+
+_GPU_ADVISORY_SHOWN = False
+
+
+def _maybe_show_gpu_advisory() -> None:
+    """Show GPU advisory once per session."""
+    global _GPU_ADVISORY_SHOWN
+    if not _GPU_ADVISORY_SHOWN:
+        _check_gpu_advisory()
+        _GPU_ADVISORY_SHOWN = True
+
+
 if TORCH_AVAILABLE:
-    class ColorUnmixingCNN(nn.Module):
+    class LayerUnmixingCNN(nn.Module):
         """
-        Lightweight CNN for unmixing multi-spectral QR code colors.
-
-        Takes an RGB image and outputs 6 binary layer masks.
-        Uses a simple encoder-decoder architecture.
+        CNN for unmixing multi-spectral QR code colors.
+        
+        Configurable output channels for RGB (3) or palette (6) modes.
         """
 
-        def __init__(self):
+        def __init__(self, num_outputs: int = 6):
             super().__init__()
+            
+            self.num_outputs = num_outputs
 
             # Encoder
             self.enc1 = nn.Sequential(
@@ -71,212 +132,291 @@ if TORCH_AVAILABLE:
                 nn.ReLU(inplace=True),
             )
 
-            # Output layer: 6 channels for 6 binary layers
-            self.output = nn.Conv2d(32, 6, kernel_size=1)
+            # Output layer
+            self.output = nn.Conv2d(32, num_outputs, kernel_size=1)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            """
-            Forward pass.
-
-            Args:
-                x: Input tensor of shape (batch, 3, height, width)
-
-            Returns:
-                Output tensor of shape (batch, 6, height, width)
-            """
-            # Encoder
             e1 = self.enc1(x)
             e2 = self.enc2(e1)
-
-            # Decoder
             d1 = self.dec1(e2)
-
-            # Output
             out = self.output(d1)
             return torch.sigmoid(out)
 
 
-class MLDecoder:
-    """
-    ML-based decoder for multi-spectral QR codes.
-
-    Uses a CNN to unmix color layers, then applies standard QR decoding
-    to each recovered layer.
-    """
-
-    def __init__(self, device: str | None = None):
-        """
-        Initialize the ML decoder.
-
-        Args:
-            device: Device to use ('cpu', 'cuda', or None for auto-detect)
-        """
+class _BaseMLDecoder:
+    """Base class for ML decoders."""
+    
+    def __init__(self, num_outputs: int, device: str | None = None):
         if not TORCH_AVAILABLE:
             raise ImportError(
                 "PyTorch is required for ML decoder. "
                 "Install with: pip install multispecqr[ml]"
             )
 
+        _maybe_show_gpu_advisory()
+
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = torch.device(device)
+        self.num_outputs = num_outputs
 
-        self.model = ColorUnmixingCNN().to(self.device)
+        self.model = LayerUnmixingCNN(num_outputs=num_outputs).to(self.device)
         self.model.eval()
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.criterion = nn.BCELoss()
 
     def preprocess(self, img: Image.Image) -> torch.Tensor:
-        """
-        Preprocess an image for the model.
-
-        Args:
-            img: PIL Image in RGB mode
-
-        Returns:
-            Tensor of shape (1, 3, H, W) normalized to [0, 1]
-        """
+        """Preprocess an image for the model."""
         arr = np.array(img).astype(np.float32) / 255.0
-        # Convert from (H, W, C) to (C, H, W)
         arr = arr.transpose(2, 0, 1)
         tensor = torch.from_numpy(arr).unsqueeze(0).to(self.device)
         return tensor
 
     def postprocess(self, output: torch.Tensor) -> np.ndarray:
-        """
-        Postprocess model output to binary layers.
-
-        Args:
-            output: Model output tensor of shape (1, 6, H, W)
-
-        Returns:
-            Binary array of shape (H, W, 6)
-        """
-        # Move to CPU and convert to numpy
+        """Postprocess model output to binary layers."""
         arr = output.squeeze(0).detach().cpu().numpy()
-        # Transpose from (C, H, W) to (H, W, C)
         arr = arr.transpose(1, 2, 0)
-        # Threshold at 0.5
         binary = (arr > 0.5).astype(np.uint8)
         return binary
 
     def predict_layers(self, img: Image.Image) -> np.ndarray:
-        """
-        Predict binary layers from an image.
-
-        Args:
-            img: PIL Image in RGB mode
-
-        Returns:
-            Binary array of shape (H, W, 6)
-        """
+        """Predict binary layers from an image."""
         self.model.eval()
         with torch.no_grad():
             x = self.preprocess(img)
             output = self.model(x)
             return self.postprocess(output)
 
+
+class RGBMLDecoder(_BaseMLDecoder):
+    """
+    ML decoder for RGB-encoded QR codes.
+    
+    Outputs 3 binary layers corresponding to R, G, B channels.
+    """
+    
+    def __init__(self, device: str | None = None):
+        super().__init__(num_outputs=3, device=device)
+    
     def train_epoch(
         self,
         num_samples: int = 100,
         batch_size: int = 8,
+        version: int = 1,
     ) -> float:
-        """
-        Train the model for one epoch using generated data.
-
-        Args:
-            num_samples: Number of training samples to generate
-            batch_size: Batch size for training
-
-        Returns:
-            Average loss for the epoch
-        """
+        """Train for one epoch using generated RGB data."""
         self.model.train()
         total_loss = 0.0
         num_batches = (num_samples + batch_size - 1) // batch_size
 
         for _ in range(num_batches):
-            # Generate training batch
-            images, labels = generate_training_batch(batch_size)
+            images, labels = _generate_rgb_batch(batch_size, version)
 
-            # Convert to tensors
             x = torch.from_numpy(images.transpose(0, 3, 1, 2)).float().to(self.device) / 255.0
             y = torch.from_numpy(labels.transpose(0, 3, 1, 2)).float().to(self.device)
 
-            # Forward pass
             self.optimizer.zero_grad()
             output = self.model(x)
             loss = self.criterion(output, y)
-
-            # Backward pass
             loss.backward()
             self.optimizer.step()
 
             total_loss += loss.item()
 
         return total_loss / num_batches
+    
+    def decode(self, img: Image.Image) -> List[str]:
+        """Decode an RGB QR code into 3 strings."""
+        import cv2
+        
+        layers = self.predict_layers(img)
+        
+        results = []
+        for i in range(3):
+            layer = layers[:, :, i]
+            binary = ((1 - layer) * 255).astype(np.uint8)
+            
+            # Try OpenCV first
+            detector = cv2.QRCodeDetector()
+            data, _, _ = detector.detectAndDecode(binary)
+            
+            if not data:
+                # Fallback to pyzbar
+                try:
+                    from pyzbar import pyzbar
+                    pil_img = Image.fromarray(binary)
+                    decoded = pyzbar.decode(pil_img)
+                    if decoded:
+                        data = decoded[0].data.decode('utf-8')
+                except ImportError:
+                    pass
+            
+            results.append(data or "")
+        
+        return results
 
 
-def generate_training_sample(
+class PaletteMLDecoder(_BaseMLDecoder):
+    """
+    ML decoder for palette-encoded QR codes.
+    
+    Outputs 6 binary layers corresponding to the 6-bit palette encoding.
+    """
+    
+    def __init__(self, device: str | None = None):
+        super().__init__(num_outputs=6, device=device)
+    
+    def train_epoch(
+        self,
+        num_samples: int = 100,
+        batch_size: int = 8,
+        version: int = 1,
+        num_layers: int = 6,
+    ) -> float:
+        """Train for one epoch using generated palette data."""
+        self.model.train()
+        total_loss = 0.0
+        num_batches = (num_samples + batch_size - 1) // batch_size
+
+        for _ in range(num_batches):
+            images, labels = _generate_palette_batch(batch_size, version, num_layers)
+
+            x = torch.from_numpy(images.transpose(0, 3, 1, 2)).float().to(self.device) / 255.0
+            y = torch.from_numpy(labels.transpose(0, 3, 1, 2)).float().to(self.device)
+
+            self.optimizer.zero_grad()
+            output = self.model(x)
+            loss = self.criterion(output, y)
+            loss.backward()
+            self.optimizer.step()
+
+            total_loss += loss.item()
+
+        return total_loss / num_batches
+    
+    def decode(self, img: Image.Image, num_layers: int = 6) -> List[str]:
+        """Decode a palette QR code into up to 6 strings."""
+        import cv2
+        
+        layers = self.predict_layers(img)
+        
+        results = []
+        for i in range(num_layers):
+            layer = layers[:, :, i]
+            binary = ((1 - layer) * 255).astype(np.uint8)
+            
+            # Try OpenCV first
+            detector = cv2.QRCodeDetector()
+            data, _, _ = detector.detectAndDecode(binary)
+            
+            if not data:
+                # Fallback to pyzbar
+                try:
+                    from pyzbar import pyzbar
+                    pil_img = Image.fromarray(binary)
+                    decoded = pyzbar.decode(pil_img)
+                    if decoded:
+                        data = decoded[0].data.decode('utf-8')
+                except ImportError:
+                    pass
+            
+            results.append(data or "")
+        
+        return results
+
+
+# =============================================================================
+# Training Data Generation
+# =============================================================================
+
+def _generate_rgb_sample(version: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate a single RGB training sample.
+    
+    Matches the actual encode_rgb behavior:
+    - channel = layer * 255
+    - So black modules (layer=1) become bright (255)
+    - White areas (layer=0) become dark (0)
+    """
+    from .encoder import _make_layer
+    
+    import random
+    import string
+    
+    # Generate 3 random payloads
+    data_list = []
+    for _ in range(3):
+        length = random.randint(3, 8)
+        data = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+        data_list.append(data)
+    
+    # Generate QR layers
+    layers = [_make_layer(d, version, "M") for d in data_list]
+    h, w = layers[0].shape
+    
+    # Build RGB image matching encode_rgb: channel = layer * 255
+    # Black modules (layer=1) -> channel=255 (bright)
+    # White areas (layer=0) -> channel=0 (dark)
+    image = np.zeros((h, w, 3), dtype=np.uint8)
+    labels = np.zeros((h, w, 3), dtype=np.uint8)
+    
+    for c in range(3):
+        image[:, :, c] = layers[c] * 255  # Match encode_rgb!
+        labels[:, :, c] = layers[c]  # 1 = black module
+    
+    return image, labels
+
+
+def _generate_rgb_batch(
+    batch_size: int = 8,
+    version: int = 1,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate a batch of RGB training samples."""
+    samples = [_generate_rgb_sample(version) for _ in range(batch_size)]
+    images = np.stack([s[0] for s in samples])
+    labels = np.stack([s[1] for s in samples])
+    return images, labels
+
+
+def _generate_palette_sample(
     version: int = 1,
     num_layers: int = 6,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Generate a single training sample.
-
-    Args:
-        version: QR code version to use
-        num_layers: Number of layers (1-6)
-
-    Returns:
-        Tuple of (image, labels) where:
-            - image: RGB array of shape (H, W, 3)
-            - labels: Binary array of shape (H, W, 6)
-    """
-    from .encoder import encode_layers, _make_layer
+    """Generate a single palette training sample."""
+    from .encoder import _make_layer
     from .palette import palette_6
 
-    # Generate random data for each layer
     import random
     import string
 
     data_list = []
-    for i in range(num_layers):
-        # Random string of 3-8 characters
+    for _ in range(num_layers):
         length = random.randint(3, 8)
         data = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
         data_list.append(data)
 
-    # Pad with empty strings if needed
     while len(data_list) < 6:
         data_list.append("")
 
-    # Generate individual layers
     layers = []
-    for i, data in enumerate(data_list):
+    for data in data_list:
         if data:
             layer = _make_layer(data, version, "M")
             layers.append(layer)
-        else:
-            # Empty layer (all zeros)
-            if layers:
-                layers.append(np.zeros_like(layers[0]))
+        elif layers:
+            layers.append(np.zeros_like(layers[0]))
 
     if not layers:
         raise ValueError("At least one layer must have data")
 
-    # Get shape from first layer
     h, w = layers[0].shape
 
-    # Build the encoded image using palette
     codebook = palette_6()
     image = np.zeros((h, w, 3), dtype=np.uint8)
     labels = np.zeros((h, w, 6), dtype=np.uint8)
 
     for y in range(h):
         for x in range(w):
-            # Build bit-vector
             bits = []
             for i in range(6):
                 if i < len(layers):
@@ -292,101 +432,91 @@ def generate_training_sample(
     return image, labels
 
 
-def generate_training_batch(
+def _generate_palette_batch(
     batch_size: int = 8,
     version: int = 1,
     num_layers: int = 6,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Generate a batch of training samples.
-
-    Args:
-        batch_size: Number of samples in the batch
-        version: QR code version to use
-        num_layers: Number of layers (1-6)
-
-    Returns:
-        Tuple of (images, labels) where:
-            - images: Array of shape (batch, H, W, 3)
-            - labels: Array of shape (batch, H, W, 6)
-    """
-    samples = [generate_training_sample(version, num_layers) for _ in range(batch_size)]
+    """Generate a batch of palette training samples."""
+    samples = [_generate_palette_sample(version, num_layers) for _ in range(batch_size)]
     images = np.stack([s[0] for s in samples])
     labels = np.stack([s[1] for s in samples])
     return images, labels
 
 
+# =============================================================================
+# Legacy API (for backward compatibility)
+# =============================================================================
+
+# Keep old names for backward compatibility
+MLDecoder = PaletteMLDecoder
+ColorUnmixingCNN = LayerUnmixingCNN
+
+
+def generate_training_sample(
+    version: int = 1,
+    num_layers: int = 6,
+    mode: str = "palette",
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Legacy function - generate training sample."""
+    if mode == "rgb":
+        return _generate_rgb_sample(version)
+    else:
+        return _generate_palette_sample(version, num_layers)
+
+
+def generate_training_batch(
+    batch_size: int = 8,
+    version: int = 1,
+    num_layers: int = 6,
+    mode: str = "palette",
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Legacy function - generate training batch."""
+    if mode == "rgb":
+        return _generate_rgb_batch(batch_size, version)
+    else:
+        return _generate_palette_batch(batch_size, version, num_layers)
+
+
 def decode_rgb_ml(
     img: Image.Image,
-    decoder: MLDecoder | None = None,
+    decoder: RGBMLDecoder | PaletteMLDecoder | None = None,
 ) -> List[str]:
     """
     Decode an RGB QR code using ML-based layer separation.
-
-    Args:
-        img: PIL Image in RGB mode
-        decoder: Optional pre-initialized MLDecoder
-
-    Returns:
-        List of 3 decoded strings (R, G, B layers)
+    
+    For best results, use a trained RGBMLDecoder.
     """
-    import cv2
-
     if decoder is None:
-        decoder = MLDecoder()
-
-    # Predict layers
-    layers = decoder.predict_layers(img)
-
-    # Decode each of the first 3 layers (R, G, B)
-    results = []
-    for i in range(3):
-        layer = layers[:, :, i]
-        # Convert to QR-readable format
-        binary = ((1 - layer) * 255).astype(np.uint8)
-
-        # Decode QR
-        detector = cv2.QRCodeDetector()
-        data, _, _ = detector.detectAndDecode(binary)
-        results.append(data or "")
-
-    return results
+        decoder = RGBMLDecoder()
+    
+    if isinstance(decoder, RGBMLDecoder):
+        return decoder.decode(img)
+    else:
+        # Legacy: using PaletteMLDecoder for RGB (not recommended)
+        layers = decoder.predict_layers(img)
+        import cv2
+        results = []
+        for i in range(3):
+            layer = layers[:, :, i]
+            binary = ((1 - layer) * 255).astype(np.uint8)
+            detector = cv2.QRCodeDetector()
+            data, _, _ = detector.detectAndDecode(binary)
+            results.append(data or "")
+        return results
 
 
 def decode_layers_ml(
     img: Image.Image,
     num_layers: int = 6,
-    decoder: MLDecoder | None = None,
+    decoder: PaletteMLDecoder | None = None,
 ) -> List[str]:
     """
     Decode palette-encoded QR code using ML-based layer separation.
-
-    Args:
-        img: PIL Image in RGB mode
-        num_layers: Number of layers to decode (1-6)
-        decoder: Optional pre-initialized MLDecoder
-
-    Returns:
-        List of decoded strings, one per layer
+    
+    For best results, use a trained PaletteMLDecoder.
     """
-    import cv2
-
     if decoder is None:
-        decoder = MLDecoder()
-
-    # Predict layers
-    layers = decoder.predict_layers(img)
-
-    # Decode each layer
-    results = []
-    for i in range(num_layers):
-        layer = layers[:, :, i]
-        # Convert to QR-readable format
-        binary = ((1 - layer) * 255).astype(np.uint8)
-
-        # Decode QR
-        detector = cv2.QRCodeDetector()
-        data, _, _ = detector.detectAndDecode(binary)
-        results.append(data or "")
-
-    return results
+        decoder = PaletteMLDecoder()
+    
+    return decoder.decode(img, num_layers=num_layers)

@@ -68,7 +68,8 @@ class TestMLDecoderBasic:
         decoder = MLDecoder()
 
         # Create a dummy image tensor (batch, channels, height, width)
-        dummy_input = torch.randn(1, 3, 64, 64)
+        # Put tensor on same device as model
+        dummy_input = torch.randn(1, 3, 64, 64).to(decoder.device)
         output = decoder.model(dummy_input)
 
         # Output should be (batch, 6, height, width) for 6 layers
