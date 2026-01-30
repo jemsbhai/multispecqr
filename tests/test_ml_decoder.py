@@ -237,3 +237,326 @@ class TestMLDecoderFallback:
         # The real fallback test is in the main module
         from multispecqr.ml_decoder import is_torch_available
         assert is_torch_available() is True
+
+
+class TestNumLayersToModelBits:
+    """Test the _num_layers_to_model_bits helper function."""
+
+    def test_layers_1_to_6_return_6(self):
+        """Layers 1-6 should use 6-bit model."""
+        from multispecqr.ml_decoder import _num_layers_to_model_bits
+        
+        for n in range(1, 7):
+            assert _num_layers_to_model_bits(n) == 6
+
+    def test_layers_7_and_8_return_8(self):
+        """Layers 7-8 should use 8-bit model."""
+        from multispecqr.ml_decoder import _num_layers_to_model_bits
+        
+        assert _num_layers_to_model_bits(7) == 8
+        assert _num_layers_to_model_bits(8) == 8
+
+    def test_layer_9_returns_9(self):
+        """Layer 9 should use 9-bit model."""
+        from multispecqr.ml_decoder import _num_layers_to_model_bits
+        
+        assert _num_layers_to_model_bits(9) == 9
+
+    def test_invalid_layers_raise_error(self):
+        """Invalid layer counts should raise ValueError."""
+        from multispecqr.ml_decoder import _num_layers_to_model_bits
+        
+        with pytest.raises(ValueError):
+            _num_layers_to_model_bits(0)
+        
+        with pytest.raises(ValueError):
+            _num_layers_to_model_bits(10)
+        
+        with pytest.raises(ValueError):
+            _num_layers_to_model_bits(-1)
+
+
+class TestPaletteMLDecoderParameterized:
+    """Test PaletteMLDecoder with different num_layers values."""
+
+    def test_create_decoder_6_layers(self):
+        """Should create 6-layer decoder (default)."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=6)
+        assert decoder.num_layers == 6
+        assert decoder.model_bits == 6
+        assert decoder.num_outputs == 6
+
+    def test_create_decoder_7_layers(self):
+        """Should create 7-layer decoder using 8-bit model."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=7)
+        assert decoder.num_layers == 7
+        assert decoder.model_bits == 8
+        assert decoder.num_outputs == 8
+
+    def test_create_decoder_8_layers(self):
+        """Should create 8-layer decoder."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=8)
+        assert decoder.num_layers == 8
+        assert decoder.model_bits == 8
+        assert decoder.num_outputs == 8
+
+    def test_create_decoder_9_layers(self):
+        """Should create 9-layer decoder."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=9)
+        assert decoder.num_layers == 9
+        assert decoder.model_bits == 9
+        assert decoder.num_outputs == 9
+
+    def test_default_is_6_layers(self):
+        """Default num_layers should be 6."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder()
+        assert decoder.num_layers == 6
+        assert decoder.model_bits == 6
+
+    def test_invalid_num_layers_raises_error(self):
+        """Invalid num_layers should raise ValueError."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        with pytest.raises(ValueError):
+            PaletteMLDecoder(num_layers=0)
+        
+        with pytest.raises(ValueError):
+            PaletteMLDecoder(num_layers=10)
+
+    def test_model_output_shape_6_layers(self):
+        """6-layer model should output 6 channels."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=6)
+        dummy_input = torch.randn(1, 3, 64, 64).to(decoder.device)
+        output = decoder.model(dummy_input)
+        
+        assert output.shape == (1, 6, 64, 64)
+
+    def test_model_output_shape_8_layers(self):
+        """8-layer model should output 8 channels."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=8)
+        dummy_input = torch.randn(1, 3, 64, 64).to(decoder.device)
+        output = decoder.model(dummy_input)
+        
+        assert output.shape == (1, 8, 64, 64)
+
+    def test_model_output_shape_9_layers(self):
+        """9-layer model should output 9 channels."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=9)
+        dummy_input = torch.randn(1, 3, 64, 64).to(decoder.device)
+        output = decoder.model(dummy_input)
+        
+        assert output.shape == (1, 9, 64, 64)
+
+
+class TestTrainingDataGeneration789:
+    """Test training data generation for 7, 8, 9 layer palettes."""
+
+    def test_generate_sample_8_layers(self):
+        """Should generate 8-layer training sample."""
+        from multispecqr.ml_decoder import _generate_palette_sample
+        
+        image, labels = _generate_palette_sample(version=1, num_layers=8)
+        
+        assert image.shape[2] == 3  # RGB
+        assert labels.shape[2] == 8  # 8 layers
+
+    def test_generate_sample_9_layers(self):
+        """Should generate 9-layer training sample."""
+        from multispecqr.ml_decoder import _generate_palette_sample
+        
+        image, labels = _generate_palette_sample(version=1, num_layers=9)
+        
+        assert image.shape[2] == 3  # RGB
+        assert labels.shape[2] == 9  # 9 layers
+
+    def test_generate_batch_8_layers(self):
+        """Should generate batch of 8-layer training data."""
+        from multispecqr.ml_decoder import _generate_palette_batch
+        
+        images, labels = _generate_palette_batch(batch_size=4, num_layers=8)
+        
+        assert images.shape == (4, images.shape[1], images.shape[2], 3)
+        assert labels.shape == (4, labels.shape[1], labels.shape[2], 8)
+
+    def test_generate_batch_9_layers(self):
+        """Should generate batch of 9-layer training data."""
+        from multispecqr.ml_decoder import _generate_palette_batch
+        
+        images, labels = _generate_palette_batch(batch_size=4, num_layers=9)
+        
+        assert images.shape == (4, images.shape[1], images.shape[2], 3)
+        assert labels.shape == (4, labels.shape[1], labels.shape[2], 9)
+
+    def test_8_layer_data_uses_palette_8(self):
+        """8-layer training data should use 256-color palette."""
+        from multispecqr.ml_decoder import _generate_palette_sample
+        from multispecqr.palette import inverse_palette_8
+        
+        image, labels = _generate_palette_sample(version=1, num_layers=8)
+        inv_palette = inverse_palette_8()
+        
+        # Check that colors come from palette_8
+        h, w = image.shape[:2]
+        for _ in range(10):
+            y, x = np.random.randint(0, h), np.random.randint(0, w)
+            color = tuple(image[y, x])
+            # Color should be in the 256-color palette
+            assert color in inv_palette, f"Color {color} not in palette_8"
+
+    def test_9_layer_data_uses_palette_9(self):
+        """9-layer training data should use 512-color palette."""
+        from multispecqr.ml_decoder import _generate_palette_sample
+        from multispecqr.palette import inverse_palette_9
+        
+        image, labels = _generate_palette_sample(version=1, num_layers=9)
+        inv_palette = inverse_palette_9()
+        
+        # Check that colors come from palette_9
+        h, w = image.shape[:2]
+        for _ in range(10):
+            y, x = np.random.randint(0, h), np.random.randint(0, w)
+            color = tuple(image[y, x])
+            # Color should be in the 512-color palette
+            assert color in inv_palette, f"Color {color} not in palette_9"
+
+
+class TestPaletteMLDecoderTraining789:
+    """Test training for 7, 8, 9 layer decoders."""
+
+    def test_train_7_layer_decoder(self):
+        """Should be able to train 7-layer decoder."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=7)
+        loss = decoder.train_epoch(num_samples=10)
+        
+        assert isinstance(loss, float)
+        assert loss >= 0
+
+    def test_train_8_layer_decoder(self):
+        """Should be able to train 8-layer decoder."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=8)
+        loss = decoder.train_epoch(num_samples=10)
+        
+        assert isinstance(loss, float)
+        assert loss >= 0
+
+    def test_train_9_layer_decoder(self):
+        """Should be able to train 9-layer decoder."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=9)
+        loss = decoder.train_epoch(num_samples=10)
+        
+        assert isinstance(loss, float)
+        assert loss >= 0
+
+
+class TestPaletteMLDecoderDecode789:
+    """Test decoding with 7, 8, 9 layer decoders."""
+
+    def test_decode_7_layers_returns_7_results(self):
+        """7-layer decoder should return 7 strings."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=7)
+        
+        # Create a dummy image
+        img = encode_layers(["A", "B", "C", "D", "E", "F", "G"], version=1)
+        result = decoder.decode(img)
+        
+        assert isinstance(result, list)
+        assert len(result) == 7
+
+    def test_decode_8_layers_returns_8_results(self):
+        """8-layer decoder should return 8 strings."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=8)
+        
+        # Create a dummy image
+        img = encode_layers(["A", "B", "C", "D", "E", "F", "G", "H"], version=1)
+        result = decoder.decode(img)
+        
+        assert isinstance(result, list)
+        assert len(result) == 8
+
+    def test_decode_9_layers_returns_9_results(self):
+        """9-layer decoder should return 9 strings."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=9)
+        
+        # Create a dummy image
+        img = encode_layers(["A", "B", "C", "D", "E", "F", "G", "H", "I"], version=1)
+        result = decoder.decode(img)
+        
+        assert isinstance(result, list)
+        assert len(result) == 9
+
+    def test_decode_override_num_layers(self):
+        """Should be able to override num_layers at decode time."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        # Create 8-layer decoder but only request 5 results
+        decoder = PaletteMLDecoder(num_layers=8)
+        img = encode_layers(["A", "B", "C", "D", "E"], version=1)
+        result = decoder.decode(img, num_layers=5)
+        
+        assert len(result) == 5
+
+    def test_decode_cannot_exceed_model_capacity(self):
+        """Cannot decode more layers than model supports."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        # Create 6-layer decoder
+        decoder = PaletteMLDecoder(num_layers=6)
+        img = encode_layers(["A", "B"], version=1)
+        
+        # Should raise error when trying to decode 8 layers with 6-bit model
+        with pytest.raises(ValueError):
+            decoder.decode(img, num_layers=8)
+
+
+class TestRGBMLDecoderUnchanged:
+    """Verify RGBMLDecoder still works as before."""
+
+    def test_rgb_decoder_still_works(self):
+        """RGBMLDecoder should be unchanged."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        decoder = RGBMLDecoder()
+        assert decoder.num_outputs == 3
+        
+        img = encode_rgb("A", "B", "C", version=1)
+        result = decoder.decode(img)
+        
+        assert len(result) == 3
+
+    def test_rgb_decoder_training(self):
+        """RGBMLDecoder training should still work."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        decoder = RGBMLDecoder()
+        loss = decoder.train_epoch(num_samples=10)
+        
+        assert isinstance(loss, float)
+        assert loss >= 0
