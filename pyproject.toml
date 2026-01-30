@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "multispecqr"
-version = "0.2.1"
+version = "0.3.0"
 description = "Encode and decode multi-spectral / multi-layer QR codes (RGB, UV, NIR) with optional ML-based separation."
 readme = "README.md"
 license = "MIT"
