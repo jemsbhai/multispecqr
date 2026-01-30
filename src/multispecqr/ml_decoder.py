@@ -401,39 +401,75 @@ class PaletteMLDecoder(_BaseMLDecoder):
 # Training Data Generation
 # =============================================================================
 
-def _generate_rgb_sample(version: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+# Layer cache for fast training data generation
+_LAYER_CACHE: dict[tuple[int, int], list[np.ndarray]] = {}
+_LAYER_CACHE_SIZE = 100  # Number of pre-generated layers per (version, size)
+
+
+def _get_cached_layers(version: int, num_needed: int, use_cache: bool = True) -> list[np.ndarray]:
+    """
+    Get random layers, optionally from cache.
+    
+    Args:
+        version: QR code version
+        num_needed: Number of layers to return
+        use_cache: If True, use cached layers (fast). If False, generate fresh (slow but more diverse).
+    """
+    from .encoder import _make_layer
+    import random
+    import string
+    
+    if not use_cache:
+        # Generate fresh layers (slow but more diverse)
+        layers = []
+        for _ in range(num_needed):
+            length = random.randint(3, 8)
+            data = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+            layer = _make_layer(data, version, "M")
+            layers.append(layer)
+        return layers
+    
+    # Generate a test layer to get dimensions
+    test_layer = _make_layer("A", version, "M")
+    cache_key = (version, test_layer.shape[0])  # (version, size)
+    
+    # Build cache if not exists
+    if cache_key not in _LAYER_CACHE or len(_LAYER_CACHE[cache_key]) < _LAYER_CACHE_SIZE:
+        layers = []
+        for _ in range(_LAYER_CACHE_SIZE):
+            length = random.randint(3, 8)
+            data = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+            layer = _make_layer(data, version, "M")
+            layers.append(layer)
+        _LAYER_CACHE[cache_key] = layers
+    
+    # Return random selection from cache
+    return random.choices(_LAYER_CACHE[cache_key], k=num_needed)
+
+
+def _generate_rgb_sample(version: int = 1, use_cache: bool = True) -> Tuple[np.ndarray, np.ndarray]:
     """Generate a single RGB training sample.
     
     Matches the actual encode_rgb behavior:
     - channel = layer * 255
     - So black modules (layer=1) become bright (255)
     - White areas (layer=0) become dark (0)
+    
+    Args:
+        version: QR code version
+        use_cache: If True, use cached layers (fast). If False, generate fresh.
     """
-    from .encoder import _make_layer
-    
-    import random
-    import string
-    
-    # Generate 3 random payloads
-    data_list = []
-    for _ in range(3):
-        length = random.randint(3, 8)
-        data = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-        data_list.append(data)
-    
-    # Generate QR layers
-    layers = [_make_layer(d, version, "M") for d in data_list]
+    # Get 3 random layers from cache
+    layers = _get_cached_layers(version, 3, use_cache=use_cache)
     h, w = layers[0].shape
     
     # Build RGB image matching encode_rgb: channel = layer * 255
-    # Black modules (layer=1) -> channel=255 (bright)
-    # White areas (layer=0) -> channel=0 (dark)
     image = np.zeros((h, w, 3), dtype=np.uint8)
     labels = np.zeros((h, w, 3), dtype=np.uint8)
     
     for c in range(3):
-        image[:, :, c] = layers[c] * 255  # Match encode_rgb!
-        labels[:, :, c] = layers[c]  # 1 = black module
+        image[:, :, c] = layers[c] * 255
+        labels[:, :, c] = layers[c]
     
     return image, labels
 
@@ -441,66 +477,97 @@ def _generate_rgb_sample(version: int = 1) -> Tuple[np.ndarray, np.ndarray]:
 def _generate_rgb_batch(
     batch_size: int = 8,
     version: int = 1,
+    use_cache: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate a batch of RGB training samples."""
-    samples = [_generate_rgb_sample(version) for _ in range(batch_size)]
+    samples = [_generate_rgb_sample(version, use_cache=use_cache) for _ in range(batch_size)]
     images = np.stack([s[0] for s in samples])
     labels = np.stack([s[1] for s in samples])
     return images, labels
 
 
+# Pre-built lookup tables for vectorized palette sample generation
+_PALETTE_LUT_6: np.ndarray | None = None
+_PALETTE_LUT_8: np.ndarray | None = None
+_PALETTE_LUT_9: np.ndarray | None = None
+
+
+def _get_palette_lut(num_bits: int) -> np.ndarray:
+    """
+    Get or build a lookup table for palette colors.
+    
+    The LUT maps integer indices (0 to 2^num_bits - 1) to RGB colors.
+    Index is computed as: sum(bit[i] * 2^i for i in range(num_bits))
+    """
+    global _PALETTE_LUT_6, _PALETTE_LUT_8, _PALETTE_LUT_9
+    
+    from .palette import palette_6, palette_8, palette_9
+    
+    if num_bits == 6:
+        if _PALETTE_LUT_6 is None:
+            codebook = palette_6()
+            lut = np.zeros((64, 3), dtype=np.uint8)
+            for bits, color in codebook.items():
+                idx = sum(b * (2 ** i) for i, b in enumerate(bits))
+                lut[idx] = color
+            _PALETTE_LUT_6 = lut
+        return _PALETTE_LUT_6
+    elif num_bits == 8:
+        if _PALETTE_LUT_8 is None:
+            codebook = palette_8()
+            lut = np.zeros((256, 3), dtype=np.uint8)
+            for bits, color in codebook.items():
+                idx = sum(b * (2 ** i) for i, b in enumerate(bits))
+                lut[idx] = color
+            _PALETTE_LUT_8 = lut
+        return _PALETTE_LUT_8
+    else:  # num_bits == 9
+        if _PALETTE_LUT_9 is None:
+            codebook = palette_9()
+            lut = np.zeros((512, 3), dtype=np.uint8)
+            for bits, color in codebook.items():
+                idx = sum(b * (2 ** i) for i, b in enumerate(bits))
+                lut[idx] = color
+            _PALETTE_LUT_9 = lut
+        return _PALETTE_LUT_9
+
+
 def _generate_palette_sample(
     version: int = 1,
     num_layers: int = 6,
+    use_cache: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Generate a single palette training sample.
+    Generate a single palette training sample (vectorized).
     
     Args:
         version: QR code version
         num_layers: Number of bits/layers (6, 8, or 9)
+        use_cache: If True, use cached layers (fast). If False, generate fresh.
         
     Returns:
         (image, labels) tuple where labels has shape (h, w, num_layers)
     """
-    from .encoder import _make_layer
-    from .palette import palette_6, palette_8, palette_9
-
-    import random
-    import string
-
-    # Select appropriate palette
+    # Select appropriate bit depth
     if num_layers <= 6:
-        codebook = palette_6()
         num_bits = 6
     elif num_layers <= 8:
-        codebook = palette_8()
         num_bits = 8
     else:
-        codebook = palette_9()
         num_bits = 9
 
-    # Generate random data for each layer
-    data_list = []
-    for _ in range(num_bits):
-        length = random.randint(3, 8)
-        data = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-        data_list.append(data)
-
-    # Generate QR layers
-    layers = [_make_layer(d, version, "M") for d in data_list]
+    # Get random layers from cache
+    layers = _get_cached_layers(version, num_bits, use_cache=use_cache)
     h, w = layers[0].shape
+    labels = np.stack(layers, axis=-1).astype(np.uint8)  # (h, w, num_bits)
 
-    # Build image and labels
-    image = np.zeros((h, w, 3), dtype=np.uint8)
-    labels = np.zeros((h, w, num_bits), dtype=np.uint8)
+    # Compute index for each pixel: sum(bit[i] * 2^i)
+    powers = 2 ** np.arange(num_bits, dtype=np.uint32)
+    indices = np.tensordot(labels, powers, axes=([-1], [0])).astype(np.uint32)
 
-    for y in range(h):
-        for x in range(w):
-            bits = tuple(int(layers[i][y, x]) for i in range(num_bits))
-            color = codebook.get(bits, (255, 255, 255))
-            image[y, x] = color
-            labels[y, x] = bits
+    # Look up colors using the precomputed LUT
+    lut = _get_palette_lut(num_bits)
+    image = lut[indices]  # (h, w, 3)
 
     return image, labels
 
@@ -509,9 +576,10 @@ def _generate_palette_batch(
     batch_size: int = 8,
     version: int = 1,
     num_layers: int = 6,
+    use_cache: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate a batch of palette training samples."""
-    samples = [_generate_palette_sample(version, num_layers) for _ in range(batch_size)]
+    samples = [_generate_palette_sample(version, num_layers, use_cache=use_cache) for _ in range(batch_size)]
     images = np.stack([s[0] for s in samples])
     labels = np.stack([s[1] for s in samples])
     return images, labels
@@ -531,12 +599,13 @@ def generate_training_sample(
     version: int = 1,
     num_layers: int = 6,
     mode: str = "palette",
+    use_cache: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Legacy function - generate training sample."""
     if mode == "rgb":
-        return _generate_rgb_sample(version)
+        return _generate_rgb_sample(version, use_cache=use_cache)
     else:
-        return _generate_palette_sample(version, num_layers)
+        return _generate_palette_sample(version, num_layers, use_cache=use_cache)
 
 
 def generate_training_batch(
@@ -544,12 +613,13 @@ def generate_training_batch(
     version: int = 1,
     num_layers: int = 6,
     mode: str = "palette",
+    use_cache: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Legacy function - generate training batch."""
     if mode == "rgb":
-        return _generate_rgb_batch(batch_size, version)
+        return _generate_rgb_batch(batch_size, version, use_cache=use_cache)
     else:
-        return _generate_palette_batch(batch_size, version, num_layers)
+        return _generate_palette_batch(batch_size, version, num_layers, use_cache=use_cache)
 
 
 def decode_rgb_ml(
