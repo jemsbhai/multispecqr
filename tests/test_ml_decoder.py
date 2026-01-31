@@ -560,3 +560,297 @@ class TestRGBMLDecoderUnchanged:
         
         assert isinstance(loss, float)
         assert loss >= 0
+
+
+class TestModelSaveLoad:
+    """Test save/load functionality for ML decoders."""
+
+    def test_rgb_decoder_save_creates_file(self, tmp_path):
+        """save() should create a file with model weights."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        decoder = RGBMLDecoder()
+        path = tmp_path / "rgb_model.pt"
+        decoder.save(str(path))
+        
+        assert path.exists()
+        assert path.stat().st_size > 0
+
+    def test_rgb_decoder_save_contains_expected_keys(self, tmp_path):
+        """Saved file should contain expected state keys."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        decoder = RGBMLDecoder()
+        path = tmp_path / "rgb_model.pt"
+        decoder.save(str(path))
+        
+        state = torch.load(str(path), weights_only=False)
+        assert 'model_state_dict' in state
+        assert 'num_outputs' in state
+        assert 'model_class' in state
+        assert state['num_outputs'] == 3
+        assert state['model_class'] == 'RGBMLDecoder'
+
+    def test_palette_decoder_save_contains_num_layers(self, tmp_path):
+        """Palette decoder save should include num_layers and model_bits."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder(num_layers=8)
+        path = tmp_path / "palette_model.pt"
+        decoder.save(str(path))
+        
+        state = torch.load(str(path), weights_only=False)
+        assert 'num_layers' in state
+        assert 'model_bits' in state
+        assert state['num_layers'] == 8
+        assert state['model_bits'] == 8
+
+    def test_rgb_decoder_load_restores_weights(self, tmp_path):
+        """load() should restore model weights."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        # Train decoder slightly to change weights from init
+        decoder1 = RGBMLDecoder()
+        decoder1.train_epoch(num_samples=5)
+        
+        # Save weights
+        path = tmp_path / "rgb_model.pt"
+        decoder1.save(str(path))
+        
+        # Load into new decoder
+        decoder2 = RGBMLDecoder()
+        decoder2.load(str(path))
+        
+        # Verify weights match
+        for (name1, param1), (name2, param2) in zip(
+            decoder1.model.state_dict().items(),
+            decoder2.model.state_dict().items()
+        ):
+            assert name1 == name2
+            assert torch.allclose(param1, param2)
+
+    def test_palette_decoder_load_restores_weights(self, tmp_path):
+        """load() should restore palette decoder weights."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder1 = PaletteMLDecoder(num_layers=6)
+        decoder1.train_epoch(num_samples=5)
+        
+        path = tmp_path / "palette_model.pt"
+        decoder1.save(str(path))
+        
+        decoder2 = PaletteMLDecoder(num_layers=6)
+        decoder2.load(str(path))
+        
+        for (name1, param1), (name2, param2) in zip(
+            decoder1.model.state_dict().items(),
+            decoder2.model.state_dict().items()
+        ):
+            assert torch.allclose(param1, param2)
+
+    def test_load_mismatched_num_outputs_raises_error(self, tmp_path):
+        """Loading a model with wrong num_outputs should raise ValueError."""
+        from multispecqr.ml_decoder import RGBMLDecoder, PaletteMLDecoder
+        
+        # Save RGB decoder (3 outputs)
+        rgb_decoder = RGBMLDecoder()
+        path = tmp_path / "rgb_model.pt"
+        rgb_decoder.save(str(path))
+        
+        # Try to load into palette decoder (6 outputs)
+        palette_decoder = PaletteMLDecoder(num_layers=6)
+        with pytest.raises(ValueError, match="Model mismatch"):
+            palette_decoder.load(str(path))
+
+    def test_save_load_roundtrip_preserves_predictions(self, tmp_path):
+        """Save/load roundtrip should preserve model predictions."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        decoder1 = RGBMLDecoder()
+        decoder1.train_epoch(num_samples=10)
+        
+        # Create test image
+        img = encode_rgb("A", "B", "C", version=1)
+        
+        # Get predictions before save
+        layers1 = decoder1.predict_layers(img)
+        
+        # Save and load
+        path = tmp_path / "model.pt"
+        decoder1.save(str(path))
+        
+        decoder2 = RGBMLDecoder()
+        decoder2.load(str(path))
+        
+        # Get predictions after load
+        layers2 = decoder2.predict_layers(img)
+        
+        # Predictions should be identical
+        assert np.array_equal(layers1, layers2)
+
+
+class TestModelFromLocal:
+    """Test from_local() for loading from local files with auto-detection."""
+
+    def test_from_local_rgb_decoder(self, tmp_path):
+        """from_local() should auto-detect and load RGB decoder."""
+        from multispecqr.ml_decoder import RGBMLDecoder, PaletteMLDecoder
+        
+        # Save an RGB decoder
+        original = RGBMLDecoder()
+        original.train_epoch(num_samples=5)
+        path = tmp_path / "rgb_model.pt"
+        original.save(str(path))
+        
+        # Load using from_local (should auto-detect RGB)
+        loaded = RGBMLDecoder.from_local(str(path))
+        
+        assert isinstance(loaded, RGBMLDecoder)
+        assert loaded.num_outputs == 3
+
+    def test_from_local_palette_decoder(self, tmp_path):
+        """from_local() should auto-detect and load Palette decoder."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        # Save a palette decoder
+        original = PaletteMLDecoder(num_layers=8)
+        original.train_epoch(num_samples=5)
+        path = tmp_path / "palette_model.pt"
+        original.save(str(path))
+        
+        # Load using from_local (should auto-detect palette with num_layers=8)
+        loaded = PaletteMLDecoder.from_local(str(path))
+        
+        assert isinstance(loaded, PaletteMLDecoder)
+        assert loaded.num_layers == 8
+        assert loaded.model_bits == 8
+
+    def test_from_local_cross_class_works(self, tmp_path):
+        """from_local() should work when called from either class."""
+        from multispecqr.ml_decoder import RGBMLDecoder, PaletteMLDecoder
+        
+        # Save an RGB decoder
+        original = RGBMLDecoder()
+        path = tmp_path / "rgb_model.pt"
+        original.save(str(path))
+        
+        # Load using PaletteMLDecoder.from_local - should still return RGBMLDecoder
+        loaded = PaletteMLDecoder.from_local(str(path))
+        
+        assert isinstance(loaded, RGBMLDecoder)
+        assert loaded.num_outputs == 3
+
+    def test_from_local_preserves_weights(self, tmp_path):
+        """from_local() should correctly restore trained weights."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        # Train and save
+        original = RGBMLDecoder()
+        original.train_epoch(num_samples=10)
+        path = tmp_path / "model.pt"
+        original.save(str(path))
+        
+        # Load with from_local
+        loaded = RGBMLDecoder.from_local(str(path))
+        
+        # Verify weights match
+        for (name1, param1), (name2, param2) in zip(
+            original.model.state_dict().items(),
+            loaded.model.state_dict().items()
+        ):
+            assert torch.allclose(param1, param2)
+
+    def test_from_local_predictions_match(self, tmp_path):
+        """from_local() loaded model should produce identical predictions."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        original = PaletteMLDecoder(num_layers=6)
+        original.train_epoch(num_samples=10)
+        
+        img = encode_layers(["A", "B", "C", "D", "E", "F"], version=1)
+        layers_original = original.predict_layers(img)
+        
+        path = tmp_path / "model.pt"
+        original.save(str(path))
+        
+        loaded = PaletteMLDecoder.from_local(str(path))
+        layers_loaded = loaded.predict_layers(img)
+        
+        assert np.array_equal(layers_original, layers_loaded)
+
+    def test_from_local_file_not_found(self):
+        """from_local() should raise error for non-existent file."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        with pytest.raises(Exception):  # FileNotFoundError or similar
+            RGBMLDecoder.from_local("nonexistent_file_12345.pt")
+
+
+class TestModelFromPretrained:
+    """Test from_pretrained() for loading from HuggingFace Hub."""
+
+    @pytest.mark.slow
+    def test_rgb_decoder_from_pretrained(self):
+        """Should load RGB decoder from HuggingFace."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        decoder = RGBMLDecoder.from_pretrained("Jemsbhai/multispecqr-rgb")
+        
+        assert decoder is not None
+        assert decoder.num_outputs == 3
+        assert isinstance(decoder, RGBMLDecoder)
+
+    @pytest.mark.slow
+    def test_palette6_decoder_from_pretrained(self):
+        """Should load Palette-6 decoder from HuggingFace."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder.from_pretrained("Jemsbhai/multispecqr-palette6")
+        
+        assert decoder is not None
+        assert decoder.num_layers == 6
+        assert decoder.model_bits == 6
+        assert decoder.num_outputs == 6
+
+    @pytest.mark.slow
+    def test_palette8_decoder_from_pretrained(self):
+        """Should load Palette-8 decoder from HuggingFace."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder.from_pretrained("Jemsbhai/multispecqr-palette8")
+        
+        assert decoder is not None
+        assert decoder.num_layers == 8
+        assert decoder.model_bits == 8
+
+    @pytest.mark.slow
+    def test_palette9_decoder_from_pretrained(self):
+        """Should load Palette-9 decoder from HuggingFace."""
+        from multispecqr.ml_decoder import PaletteMLDecoder
+        
+        decoder = PaletteMLDecoder.from_pretrained("Jemsbhai/multispecqr-palette9")
+        
+        assert decoder is not None
+        assert decoder.num_layers == 9
+        assert decoder.model_bits == 9
+
+    @pytest.mark.slow
+    def test_from_pretrained_can_decode(self):
+        """Loaded model should be able to decode images."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        decoder = RGBMLDecoder.from_pretrained("Jemsbhai/multispecqr-rgb")
+        img = encode_rgb("TEST1", "TEST2", "TEST3", version=2)
+        
+        result = decoder.decode(img)
+        
+        assert isinstance(result, list)
+        assert len(result) == 3
+
+    @pytest.mark.slow
+    def test_from_pretrained_invalid_repo_raises_error(self):
+        """Loading from non-existent repo should raise error."""
+        from multispecqr.ml_decoder import RGBMLDecoder
+        
+        with pytest.raises(Exception):  # Could be various HF errors
+            RGBMLDecoder.from_pretrained("nonexistent/fake-repo-12345")

@@ -172,6 +172,9 @@ if TORCH_AVAILABLE:
 class _BaseMLDecoder:
     """Base class for ML decoders."""
     
+    # HuggingFace model repository base
+    HF_REPO_BASE = "Jemsbhai/multispecqr"
+    
     def __init__(self, num_outputs: int, device: str | None = None):
         if not TORCH_AVAILABLE:
             raise ImportError(
@@ -213,6 +216,296 @@ class _BaseMLDecoder:
             x = self.preprocess(img)
             output = self.model(x)
             return self.postprocess(output)
+
+    def save(self, path: str) -> None:
+        """
+        Save model weights to a file.
+        
+        Args:
+            path: Path to save the model (e.g., 'model.pt')
+            
+        Example:
+            >>> decoder = RGBMLDecoder()
+            >>> decoder.train_epoch(num_samples=100)
+            >>> decoder.save('rgb_decoder.pt')
+        """
+        state = {
+            'model_state_dict': self.model.state_dict(),
+            'num_outputs': self.num_outputs,
+            'model_class': self.__class__.__name__,
+        }
+        # Add num_layers for PaletteMLDecoder
+        if hasattr(self, 'num_layers'):
+            state['num_layers'] = self.num_layers
+            state['model_bits'] = self.model_bits
+        
+        torch.save(state, path)
+    
+    def load(self, path: str) -> None:
+        """
+        Load model weights from a file.
+        
+        Args:
+            path: Path to the saved model
+            
+        Example:
+            >>> decoder = RGBMLDecoder()
+            >>> decoder.load('rgb_decoder.pt')
+        """
+        state = torch.load(path, map_location=self.device, weights_only=False)
+        
+        # Validate model compatibility
+        if state['num_outputs'] != self.num_outputs:
+            raise ValueError(
+                f"Model mismatch: saved model has {state['num_outputs']} outputs, "
+                f"but decoder expects {self.num_outputs}"
+            )
+        
+        self.model.load_state_dict(state['model_state_dict'])
+        self.model.eval()
+    
+    @classmethod
+    def from_local(
+        cls,
+        path: str,
+        device: str | None = None,
+    ):
+        """
+        Load a model from a local file with automatic type detection.
+        
+        This is the recommended way to load locally saved models, as it
+        automatically detects whether the model is RGB or Palette and
+        creates the appropriate decoder instance.
+        
+        Args:
+            path: Path to the saved model file (e.g., 'model.pt')
+            device: Device to load model on ('cuda' or 'cpu'). Auto-detected if None.
+            
+        Returns:
+            Loaded decoder instance (RGBMLDecoder or PaletteMLDecoder).
+            
+        Example:
+            >>> # Load any saved model without knowing its type
+            >>> decoder = RGBMLDecoder.from_local('my_model.pt')
+            >>> # Or equivalently:
+            >>> decoder = PaletteMLDecoder.from_local('my_model.pt')
+            
+            >>> # Train and save your own model
+            >>> decoder = PaletteMLDecoder(num_layers=8)
+            >>> decoder.train_epoch(num_samples=500)
+            >>> decoder.save('my_palette8.pt')
+            >>> 
+            >>> # Later, load it back
+            >>> decoder = PaletteMLDecoder.from_local('my_palette8.pt')
+        """
+        if not TORCH_AVAILABLE:
+            raise ImportError(
+                "PyTorch is required for ML decoder. "
+                "Install with: pip install multispecqr[ml]"
+            )
+        
+        # Load state to check model type
+        state = torch.load(path, map_location='cpu', weights_only=False)
+        
+        model_class = state.get('model_class', 'PaletteMLDecoder')
+        
+        # Create appropriate decoder instance
+        if model_class == 'RGBMLDecoder':
+            decoder = RGBMLDecoder(device=device)
+        else:
+            num_layers = state.get('num_layers', 6)
+            decoder = PaletteMLDecoder(num_layers=num_layers, device=device)
+        
+        decoder.load(path)
+        return decoder
+    
+    def push_to_hub(
+        self,
+        repo_id: str | None = None,
+        token: str | None = None,
+        private: bool = False,
+        commit_message: str = "Upload MultiSpecQR model",
+    ) -> str:
+        """
+        Push model to HuggingFace Hub.
+        
+        Args:
+            repo_id: Repository ID (e.g., 'username/model-name'). 
+                     If None, uses default based on model type.
+            token: HuggingFace API token. Uses cached token if None.
+            private: Whether to create a private repository.
+            commit_message: Commit message for the upload.
+            
+        Returns:
+            URL of the uploaded model.
+            
+        Example:
+            >>> decoder = RGBMLDecoder()
+            >>> decoder.train_epoch(num_samples=1000)
+            >>> decoder.push_to_hub('jemsbhai/multispecqr-rgb-v2')
+        """
+        try:
+            from huggingface_hub import HfApi, hf_hub_download
+        except ImportError:
+            raise ImportError(
+                "huggingface_hub is required for push_to_hub. "
+                "Install with: pip install huggingface_hub"
+            )
+        
+        import tempfile
+        import os
+        
+        # Default repo name based on model type
+        if repo_id is None:
+            if isinstance(self, RGBMLDecoder):
+                repo_id = f"{self.HF_REPO_BASE}-rgb"
+            else:
+                repo_id = f"{self.HF_REPO_BASE}-palette{self.num_layers}"
+        
+        api = HfApi()
+        
+        # Create repo if it doesn't exist
+        api.create_repo(repo_id, exist_ok=True, private=private, token=token)
+        
+        # Save model to temp file and upload
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_path = os.path.join(tmpdir, "model.pt")
+            self.save(model_path)
+            
+            # Create a simple README
+            readme_path = os.path.join(tmpdir, "README.md")
+            with open(readme_path, "w") as f:
+                f.write(self._generate_model_card())
+            
+            # Upload files
+            api.upload_file(
+                path_or_fileobj=model_path,
+                path_in_repo="model.pt",
+                repo_id=repo_id,
+                token=token,
+                commit_message=commit_message,
+            )
+            api.upload_file(
+                path_or_fileobj=readme_path,
+                path_in_repo="README.md",
+                repo_id=repo_id,
+                token=token,
+                commit_message=commit_message,
+            )
+        
+        url = f"https://huggingface.co/{repo_id}"
+        print(f"Model pushed to: {url}")
+        return url
+    
+    def _generate_model_card(self) -> str:
+        """Generate a model card README for HuggingFace."""
+        if isinstance(self, RGBMLDecoder):
+            model_type = "RGB"
+            num_layers = 3
+        else:
+            model_type = "Palette"
+            num_layers = getattr(self, 'num_layers', 6)
+        
+        return f"""---
+tags:
+- multispecqr
+- qr-code
+- image-processing
+library_name: multispecqr
+---
+
+# MultiSpecQR {model_type} Decoder
+
+Pre-trained ML decoder for multi-spectral QR codes.
+
+## Model Details
+
+- **Type**: {model_type}MLDecoder
+- **Outputs**: {self.num_outputs} layers
+- **Architecture**: LayerUnmixingCNN
+
+## Usage
+
+```python
+from multispecqr.ml_decoder import {model_type}MLDecoder
+
+# Load pre-trained model
+decoder = {model_type}MLDecoder.from_pretrained("{self.HF_REPO_BASE}-{model_type.lower()}{num_layers if model_type == 'Palette' else ''}")
+
+# Decode an image
+results = decoder.decode(image)
+```
+
+## Training
+
+This model was trained on synthetically generated QR codes using the MultiSpecQR library.
+
+## Links
+
+- [MultiSpecQR GitHub](https://github.com/jemsbhai/multispecqr)
+- [MultiSpecQR PyPI](https://pypi.org/project/multispecqr/)
+"""
+    
+    @classmethod
+    def from_pretrained(
+        cls,
+        repo_id: str,
+        token: str | None = None,
+        device: str | None = None,
+        **kwargs,
+    ):
+        """
+        Load a pre-trained model from HuggingFace Hub.
+        
+        Args:
+            repo_id: Repository ID (e.g., 'jemsbhai/multispecqr-rgb')
+            token: HuggingFace API token. Uses cached token if None.
+            device: Device to load model on ('cuda' or 'cpu').
+            **kwargs: Additional arguments passed to decoder constructor.
+            
+        Returns:
+            Loaded decoder instance.
+            
+        Example:
+            >>> decoder = RGBMLDecoder.from_pretrained('jemsbhai/multispecqr-rgb')
+            >>> results = decoder.decode(image)
+        """
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError:
+            raise ImportError(
+                "huggingface_hub is required for from_pretrained. "
+                "Install with: pip install huggingface_hub"
+            )
+        
+        # Download model file
+        model_path = hf_hub_download(
+            repo_id=repo_id,
+            filename="model.pt",
+            token=token,
+        )
+        
+        # Load state to check model type
+        state = torch.load(model_path, map_location='cpu', weights_only=False)
+        
+        # Create appropriate decoder instance
+        if cls == _BaseMLDecoder:
+            # Called from base class - determine type from state
+            if state.get('model_class') == 'RGBMLDecoder':
+                decoder = RGBMLDecoder(device=device)
+            else:
+                num_layers = state.get('num_layers', 6)
+                decoder = PaletteMLDecoder(num_layers=num_layers, device=device, **kwargs)
+        else:
+            # Called from subclass
+            if cls == PaletteMLDecoder:
+                num_layers = kwargs.pop('num_layers', state.get('num_layers', 6))
+                decoder = cls(num_layers=num_layers, device=device, **kwargs)
+            else:
+                decoder = cls(device=device, **kwargs)
+        
+        decoder.load(model_path)
+        return decoder
 
 
 class RGBMLDecoder(_BaseMLDecoder):

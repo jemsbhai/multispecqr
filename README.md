@@ -120,43 +120,86 @@ For improved robustness with noisy or distorted images, use the neural network-b
 **Installation:**
 
 ```bash
-# CPU installation (works everywhere)
+# Basic installation (CPU-only PyTorch)
+pip install multispecqr[ml]
+```
+
+**GPU Acceleration (Recommended):**
+
+If you have an NVIDIA GPU, install CUDA-enabled PyTorch for significantly faster training (~10-50x speedup):
+
+```bash
+# Install multispecqr with ML dependencies
 pip install multispecqr[ml]
 
-# GPU installation (much faster training - recommended if you have NVIDIA GPU)
-pip install multispecqr[ml]
+# Replace CPU PyTorch with CUDA version
 pip uninstall torch torchvision -y
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
 
-> **Note:** If you have an NVIDIA GPU but installed the CPU version, the library will detect this and show upgrade instructions.
+> **Note:** The library automatically detects if you have an NVIDIA GPU but are using CPU-only PyTorch, and will show upgrade instructions.
 
-**Training and Usage:**
+**Using Pre-trained Models (Recommended):**
 
-The ML decoder uses separate models for RGB and palette modes:
+Pre-trained models are available on HuggingFace Hub for immediate use without training:
 
 ```python
 from multispecqr.ml_decoder import RGBMLDecoder, PaletteMLDecoder
 
-# For RGB mode (3 layers)
+# Load pre-trained RGB decoder (3 layers)
+decoder = RGBMLDecoder.from_pretrained("Jemsbhai/multispecqr-rgb")
+result = decoder.decode(img)  # Returns ['R data', 'G data', 'B data']
+
+# Load pre-trained palette decoders (6, 8, or 9 layers)
+decoder6 = PaletteMLDecoder.from_pretrained("Jemsbhai/multispecqr-palette6")
+decoder8 = PaletteMLDecoder.from_pretrained("Jemsbhai/multispecqr-palette8")
+decoder9 = PaletteMLDecoder.from_pretrained("Jemsbhai/multispecqr-palette9")
+
+result = decoder6.decode(img)  # Returns 6 strings
+```
+
+Available pre-trained models:
+- `Jemsbhai/multispecqr-rgb` - RGB mode (3 layers)
+- `Jemsbhai/multispecqr-palette6` - Palette mode (6 layers, 64-color)
+- `Jemsbhai/multispecqr-palette8` - Palette mode (8 layers, 256-color)
+- `Jemsbhai/multispecqr-palette9` - Palette mode (9 layers, 512-color)
+
+**Training Your Own Models:**
+
+You can also train models on your own data for custom use cases:
+
+```python
+from multispecqr.ml_decoder import RGBMLDecoder, PaletteMLDecoder
+
+# Train RGB decoder
 rgb_decoder = RGBMLDecoder()  # Auto-detects GPU
 for epoch in range(50):
     loss = rgb_decoder.train_epoch(num_samples=200, version=2)
     if (epoch + 1) % 10 == 0:
         print(f"Epoch {epoch + 1}: loss = {loss:.4f}")
 
-# Decode RGB image
-result = rgb_decoder.decode(img)  # Returns ['R data', 'G data', 'B data']
-
-# For palette mode (6 layers)
-palette_decoder = PaletteMLDecoder()  # Auto-detects GPU
+# Train palette decoder (6, 8, or 9 layers)
+palette_decoder = PaletteMLDecoder(num_layers=6)
 for epoch in range(50):
     loss = palette_decoder.train_epoch(num_samples=200, version=2)
-    if (epoch + 1) % 10 == 0:
-        print(f"Epoch {epoch + 1}: loss = {loss:.4f}")
+```
 
-# Decode palette image
-result = palette_decoder.decode(img, num_layers=6)  # Returns 6 strings
+**Saving and Loading Models:**
+
+```python
+# Save trained model locally
+decoder.save("my_decoder.pt")
+
+# Load from local file (auto-detects model type)
+decoder = RGBMLDecoder.from_local("my_decoder.pt")
+# Or equivalently:
+decoder = PaletteMLDecoder.from_local("my_decoder.pt")
+
+# Load from any HuggingFace repo (yours or others)
+decoder = RGBMLDecoder.from_pretrained("username/custom-multispecqr-model")
+
+# Push your model to HuggingFace Hub
+decoder.push_to_hub("username/my-multispecqr-model")
 ```
 
 The ML decoders use lightweight CNNs to unmix color layers, providing better robustness for:
@@ -164,7 +207,7 @@ The ML decoders use lightweight CNNs to unmix color layers, providing better rob
 - Photos with color distortion
 - Noisy or low-quality images
 
-> **Important:** The ML decoders require training before use. Untrained weights will not decode successfully. Use the same QR version for training and inference. See `examples/07_ml_decoder_training.py` for a complete training and evaluation example.
+> **Tip:** For best results, use the same QR version for training and inference. See `examples/07_ml_decoder_training.py` for a complete training and evaluation example.
 
 ### Command Line Interface
 
@@ -509,22 +552,24 @@ Each network learns to unmix the color channels back into independent binary lay
 ```python
 from multispecqr.ml_decoder import RGBMLDecoder, PaletteMLDecoder
 
-# Train RGB decoder on synthetic data
+# Option 1: Load pre-trained from HuggingFace (recommended)
+rgb_decoder = RGBMLDecoder.from_pretrained("Jemsbhai/multispecqr-rgb")
+result = rgb_decoder.decode(img)
+
+# Option 2: Load from local file (auto-detects model type)
+rgb_decoder = RGBMLDecoder.from_local("my_model.pt")
+
+# Option 3: Load from any HuggingFace repo
+rgb_decoder = RGBMLDecoder.from_pretrained("username/custom-model")
+
+# Option 4: Train your own decoder
 rgb_decoder = RGBMLDecoder()
 for epoch in range(50):
     loss = rgb_decoder.train_epoch(num_samples=200, version=2)
 result = rgb_decoder.decode(img)
 
-# Train palette decoder on synthetic data
-palette_decoder = PaletteMLDecoder()
-for epoch in range(50):
-    loss = palette_decoder.train_epoch(num_samples=200, version=2)
-result = palette_decoder.decode(img, num_layers=6)
-
-# Save/load weights for reuse
-import torch
-torch.save(rgb_decoder.model.state_dict(), 'rgb_weights.pth')
-rgb_decoder.model.load_state_dict(torch.load('rgb_weights.pth'))
+# Save trained models
+rgb_decoder.save('rgb_decoder.pt')
 ```
 
 ## Requirements
@@ -541,6 +586,8 @@ rgb_decoder.model.load_state_dict(torch.load('rgb_weights.pth'))
 pip install multispecqr[ml]
 ```
 - torch (PyTorch)
+- torchvision
+- huggingface_hub (for loading pre-trained models)
 
 ## License
 

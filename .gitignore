@@ -48,6 +48,7 @@ dmypy.json
 
 # Generated datasets (large files)
 datasets/
+models/
 *.npz
 *.pt
 *.pth

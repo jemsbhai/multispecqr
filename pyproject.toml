@@ -42,6 +42,7 @@ optional = true
 [tool.poetry.group.ml.dependencies]
 torch = ">=2.0"
 torchvision = ">=0.15"
+huggingface_hub = ">=0.20.0"
 
 [tool.poetry.scripts]
 multispecqr = "multispecqr._cli:main"
@@ -59,6 +60,11 @@ exclude_lines = [
     "no cov",
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
 
 [tool.mypy]
